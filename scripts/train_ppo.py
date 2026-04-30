@@ -45,7 +45,7 @@ if local_env_path.exists():
     PyroRLEnv = module.PyroRLEnv
 else:
     # Fallback to installed package import.
-    PyroRLEnv = importlib.import_module("pyrorl.envs").PyroRLEnv
+    PyroRLEnv = importlib.import_module("pyrorl.pyrorl.envs").PyroRLEnv
 
 
 def linear_lr_schedule(
