@@ -179,12 +179,9 @@ The repository includes scripts to train robust models on different environment 
 python scripts/train_ppo.py --calibration california --timesteps 100000
 ```
 Then, save the best model:
-```bash
-# Windows
-rename checkpoints\best_model.zip ppo_california.zip
 
-# Linux/macOS
-mv checkpoints/best_model.zip checkpoints/ppo_california.zip
+```bash
+rename checkpoints\best_model.zip ppo_california.zip
 ```
 
 ### Train Saudi model
