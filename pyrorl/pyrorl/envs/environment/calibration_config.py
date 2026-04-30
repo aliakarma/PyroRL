@@ -214,4 +214,3 @@ def get_config(calibration: str) -> EnvConfig:
             f"Unknown calibration {calibration!r}. Valid options: {valid}"
         )
     return factory()
-""", "Description": "Structured EnvConfig dataclass with California and Saudi profiles, plus get_config() factory.", "IsArtifact": false, "Overwrite": false, "TargetFile": "c:\\Users\\Ali Akarma\\Desktop\\Github\\PyroRL\\pyrorl\\pyrorl\\envs\\environment\\calibration_config.py"}
