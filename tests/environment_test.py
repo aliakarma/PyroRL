@@ -3,7 +3,7 @@ Unit tests for each of the functions in environment.py
 """
 
 import numpy as np
-from pyrorl.envs.environment.environment import (
+from pyrorl.pyrorl.envs.environment.environment import (
     FireWorld,
     FIRE_INDEX,
     POPULATED_INDEX,
