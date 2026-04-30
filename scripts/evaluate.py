@@ -38,7 +38,7 @@ if local_env_path.exists():
     spec.loader.exec_module(module)
     PyroRLEnv = module.PyroRLEnv
 else:
-    PyroRLEnv = importlib.import_module("pyrorl.envs").PyroRLEnv
+    PyroRLEnv = importlib.import_module("pyrorl.pyrorl.envs").PyroRLEnv
 
 
 # ---------------------------------------------------------------------------
