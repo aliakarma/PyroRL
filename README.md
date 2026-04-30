@@ -48,7 +48,7 @@ for _ in range(10):
     You can also toggle calibration modes to switch between California-style forests and Saudi desert dynamics:
 
     ```python
-    from pyrorl.envs import PyroRLEnv
+    from pyrorl.pyrorl.envs import PyroRLEnv
 
     env = PyroRLEnv(
         num_rows=num_rows,
