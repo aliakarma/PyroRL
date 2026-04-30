@@ -8,7 +8,7 @@ from pyrorl.map_helpers.create_map_info import (
     MAP_DIRECTORY,
     load_map_info,
 )
-from pyrorl.envs.environment.environment import FireWorld, PATHS_INDEX, POPULATED_INDEX
+from pyrorl.pyrorl.envs.environment.environment import FireWorld, PATHS_INDEX, POPULATED_INDEX
 import os
 import shutil
 
