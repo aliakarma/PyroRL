@@ -150,6 +150,91 @@ If instability occurs:
 2. Verify fuel distribution with debug stats
 3. Adjust calibration parameters (fuel_mean, fuel_stdev, fire_propagation_rate)
 
+## PPO Sanity Check
+
+Before scaling training to cloud infrastructure, verify that reinforcement learning can learn meaningful behavior on PyroRL with PPO.
+
+### Install Dependencies
+
+Ensure you have Stable-Baselines3 and plotting tools:
+
+```bash
+pip install stable-baselines3 matplotlib pandas tensorboard
+```
+
+### Run Training (California)
+
+Train a PPO agent on California calibration for 50,000 timesteps:
+
+```bash
+python scripts/train_ppo.py --calibration california --timesteps 50000
+```
+
+### Run Training (Saudi)
+
+Train a PPO agent on Saudi calibration for 50,000 timesteps:
+
+```bash
+python scripts/train_ppo.py --calibration saudi --timesteps 50000
+```
+
+### Training Options
+
+```bash
+# Custom timesteps
+python scripts/train_ppo.py --calibration california --timesteps 100000
+
+# Custom seed for reproducibility
+python scripts/train_ppo.py --calibration saudi --seed 123
+
+# Custom checkpoint directory
+python scripts/train_ppo.py --save_path my_models/
+```
+
+### What to Expect
+
+This sanity check verifies that:
+
+1. **Training doesn't crash**: Environment, model, and monitoring work together
+2. **Rewards trend upward**: Average reward over episodes should increase (even slightly)
+3. **Model learns calibration differences**: California and Saudi should show different learning curves
+4. **Convergence is reasonable**: Learning should stabilize by ~50k timesteps
+
+### Output
+
+Training produces:
+
+- **Model checkpoint**: `checkpoints/ppo_{calibration}.zip`
+- **Training logs**: `logs/{calibration}_ppo/` (TensorBoard-compatible)
+- **Monitor data**: Episode rewards and lengths in `monitor.csv`
+- **Reward curve plot**: `logs/{calibration}_ppo/{calibration}_reward_curve.png`
+
+### Interpretation
+
+- **Reward trend**: Look for upward trajectory in reward curve (noisy is okay)
+- **Episode length**: May increase or decrease depending on learned policy
+- **Evaluation**: 5 deterministic rollouts shown at end; should be consistent with training trend
+- **Difference between calibrations**: California typically shows faster learning (denser rewards)
+
+### Hyperparameters
+
+Default hyperparameters are conservative and chosen for stability:
+
+- Learning rate: 3e-4
+- n_steps: 2048 (episode length before update)
+- batch_size: 64
+- gamma: 0.99 (discount factor)
+
+For more aggressive learning, increase learning_rate or reduce batch_size (see Stable-Baselines3 docs).
+
+### Next Steps
+
+After confirming sanity check passes:
+
+1. Scale timesteps for better convergence (500k - 1M)
+2. Tune hyperparameters for your specific calibration
+3. Deploy to cloud for distributed training
+
 ## How to Contribute
 
 For information on how to contribute, check out our [contribution guide](https://sisl.github.io/PyroRL/contribution-guide/).

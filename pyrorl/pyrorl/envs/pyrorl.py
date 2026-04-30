@@ -4,6 +4,7 @@ OpenAI Gym Environment Wrapper Class
 
 from pyrorl.envs.environment.environment import (
     FireWorld,
+    FIRE_INDEX,
     POPULATED_INDEX,
     EVACUATING_INDEX,
 )
@@ -14,7 +15,6 @@ import numpy as np
 import os
 import pygame
 import shutil
-import sys
 from typing import Optional, Any, Tuple, List
 
 # Constants for visualization
@@ -46,6 +46,8 @@ class WildfireEvacuationEnv(gym.Env):
         visibility_radius: Optional[int] = None,
         dust_intensity: Optional[float] = None,
         visibility_center: Optional[Tuple[int, int]] = None,
+        terminate_on_population_loss: bool = True,
+        reward_weights: Optional[dict[str, float]] = None,
         debug: bool = False,
         skip: bool = False,
     ):
@@ -84,6 +86,8 @@ class WildfireEvacuationEnv(gym.Env):
         self.visibility_radius = visibility_radius
         self.dust_intensity = dust_intensity
         self.visibility_center = visibility_center
+        self.terminate_on_population_loss = terminate_on_population_loss
+        self.reward_weights = reward_weights
         self.debug = debug
         self.skip = skip
         self.fire_env = FireWorld(
@@ -100,6 +104,8 @@ class WildfireEvacuationEnv(gym.Env):
             fire_propagation_rate=fire_propagation_rate,
             calibration=calibration,
             fuel_burn_rate=fuel_burn_rate,
+            reward_weights=reward_weights,
+            terminate_on_population_loss=terminate_on_population_loss,
             debug=debug,
         )
 
@@ -118,11 +124,15 @@ class WildfireEvacuationEnv(gym.Env):
             os.mkdir(IMG_DIRECTORY)
 
     def reset(
-        self, seed: Optional[int] = None, options: Optional[dict[str, Any]] = None
+        self,
+        *,
+        seed: Optional[int] = None,
+        options: Optional[dict[str, Any]] = None,
     ) -> tuple[np.ndarray, dict[str, Any]]:
         """
         Reset the environment to its initial state.
         """
+        super().reset(seed=seed)
         self.fire_env = FireWorld(
             self.num_rows,
             self.num_cols,
@@ -136,6 +146,8 @@ class WildfireEvacuationEnv(gym.Env):
             fire_propagation_rate=self.fire_propagation_rate,
             calibration=self.calibration,
             fuel_burn_rate=self.fuel_burn_rate,
+            reward_weights=self.reward_weights,
+            terminate_on_population_loss=self.terminate_on_population_loss,
             debug=self.debug,
         )
 
@@ -154,7 +166,22 @@ class WildfireEvacuationEnv(gym.Env):
         observations = self._apply_visibility(self.fire_env.get_state())
         rewards = self.fire_env.get_state_utility()
         terminated = self.fire_env.get_terminated()
-        return observations, rewards, terminated, False, {"": ""}
+        state = self.fire_env.get_state()
+        info = {
+            "fire_cells": int(state[FIRE_INDEX].sum()),
+            "burning_population": int(
+                np.logical_and(
+                    state[FIRE_INDEX] == 1,
+                    state[POPULATED_INDEX] == 1,
+                ).sum()
+            ),
+            "finished_evac": int(self.fire_env.last_reward_components.get("finished_evac", 0)),
+            "newly_burned": int(self.fire_env.last_reward_components.get("newly_burned", 0)),
+            "fire_delta": float(self.fire_env.last_reward_components.get("fire_delta", 0.0)),
+            "new_ignitions": int(self.fire_env.last_reward_components.get("new_ignitions", 0)),
+            "action": int(action),
+        }
+        return observations, rewards, terminated, False, info
 
     def _apply_visibility(self, state_space: np.ndarray) -> np.ndarray:
         if self.visibility_radius is None:

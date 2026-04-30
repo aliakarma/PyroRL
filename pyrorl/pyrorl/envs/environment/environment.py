@@ -44,6 +44,8 @@ class FireWorld:
         fire_propagation_rate: Optional[float] = None,
         calibration: str = "california",
         fuel_burn_rate: Optional[float] = None,
+        reward_weights: Optional[Dict[str, float]] = None,
+        terminate_on_population_loss: bool = True,
         debug: bool = False,
     ):
         """
@@ -75,6 +77,7 @@ class FireWorld:
             fuel_burn_rate = 1.0 if calibration == "california" else 1.0
         self.fuel_burn_rate = fuel_burn_rate
         self.debug = debug
+        self.terminate_on_population_loss = terminate_on_population_loss
 
         # Check that populated areas are within the grid
         valid_populated_areas = (
@@ -102,6 +105,35 @@ class FireWorld:
         # Define the state and action space
         self.reward = 0
         self.state_space = np.zeros([5, num_rows, num_cols])
+        self.suppression_mask = np.zeros((num_rows, num_cols), dtype=np.float32)
+        self.suppression_decay = 0.85
+        self.suppression_strength = 0.55 if calibration == "california" else 0.6
+        self.suppression_radius = 1 if calibration == "california" else 2
+        # Besides reducing future spread probability, suppression can actively extinguish
+        # existing burning cells in the treated zone. Without this, actions can be too
+        # weak relative to stochastic spread for PPO to learn from.
+        self.suppression_extinguish_prob = 0.55 if calibration == "california" else 0.45
+        self.last_finished_evac_count = 0
+        self.last_new_ignitions = 0
+        self.reward_weights = reward_weights or {
+            # Dense fire-shaped reward.
+            # Keep weights modest to avoid domination by any single term.
+            "fire_delta": 1.0,  # + when burning cells decrease
+            "burning_cells": 0.10,  # shaping: reward includes -w * burning_cells
+            "new_ignitions": 0.05,  # penalty for spread events each step
+            # Population-related costs (kept smaller than before to avoid overwhelming fire signal)
+            "newly_burned_population": 15.0,
+            "burning_population": 3.0,
+            "finished_evac": 8.0,
+        }
+        self.last_reward_components = {
+            "fire_delta": 0.0,
+            "fire_cells": 0,
+            "newly_burned": 0,
+            "burning_population": 0,
+            "finished_evac": 0,
+            "new_ignitions": 0,
+        }
 
         # Set up actions -- add extra action for doing nothing
         num_paths, num_actions = np.arange(len(paths)), 0
@@ -180,6 +212,7 @@ class FireWorld:
         # Initialize populated areas
         pop_rows, pop_cols = populated_areas[:, 0], populated_areas[:, 1]
         self.state_space[POPULATED_INDEX, pop_rows, pop_cols] = 1
+        self.prev_fire_cells = int(self.state_space[FIRE_INDEX].sum())
 
         # Initialize self.paths
         self.paths: List[List[Any]] = []
@@ -228,7 +261,7 @@ class FireWorld:
             self.fire_mask = torch.from_numpy(self.fire_mask)
 
         # Record which population cells have finished evacuating
-        self.finished_evacuating_cells = []
+        self.finished_evacuating_cells: list[list[int]] = []
 
         if self.debug and self.calibration == "saudi":
             self._log_fuel_stats("init")
@@ -258,6 +291,39 @@ class FireWorld:
         self.state_space[FUEL_INDEX, burning_cells[0], burning_cells[1]] = np.maximum(
             current_fuel, min_fuel
         )
+
+    def _apply_suppression_zone(
+        self, center_row: int, center_col: int, radius: Optional[int] = None
+    ) -> None:
+        if radius is None:
+            radius = self.suppression_radius
+
+        row_min = max(0, center_row - radius)
+        row_max = min(self.state_space.shape[1] - 1, center_row + radius)
+        col_min = max(0, center_col - radius)
+        col_max = min(self.state_space.shape[2] - 1, center_col + radius)
+        self.suppression_mask[row_min : row_max + 1, col_min : col_max + 1] = np.maximum(
+            self.suppression_mask[row_min : row_max + 1, col_min : col_max + 1],
+            1.0,
+        )
+
+        # Active extinguishing: probabilistically clear burning cells in the treated zone.
+        zone_fire = self.state_space[FIRE_INDEX, row_min : row_max + 1, col_min : col_max + 1]
+        if np.any(zone_fire == 1):
+            rng = np.random.random(zone_fire.shape)
+            extinguish = (zone_fire == 1) & (rng < self.suppression_extinguish_prob)
+            if np.any(extinguish):
+                zone_fire = zone_fire.copy()
+                zone_fire[extinguish] = 0
+                self.state_space[FIRE_INDEX, row_min : row_max + 1, col_min : col_max + 1] = zone_fire
+
+    def _apply_action_suppression(self, pop_cell: tuple, path_index: int) -> None:
+        pop_row, pop_col = int(pop_cell[0]), int(pop_cell[1])
+        self._apply_suppression_zone(pop_row, pop_col, radius=self.suppression_radius)
+
+        path_rows, path_cols = np.where(self.paths[path_index][0] > 0)
+        for row, col in zip(path_rows.tolist(), path_cols.tolist()):
+            self._apply_suppression_zone(int(row), int(col), radius=1)
 
     def _build_oasis_clusters(self, num_rows: int, num_cols: int) -> np.ndarray:
         cluster_count = max(4, int(min(num_rows, num_cols) / 2.8))
@@ -386,6 +452,7 @@ class FireWorld:
         Sample the next state of the wildfire model.
         """
         burning_before = int(self.state_space[FIRE_INDEX].sum())
+        prev_fire = self.state_space[FIRE_INDEX].copy()
         if self.wind_model == "shamal":
             self._update_shamal_wind_mask()
 
@@ -418,15 +485,26 @@ class FireWorld:
         if self.terrain_spread_factor is not None:
             z = torch.clamp(z * self.terrain_spread_factor, min=0.0, max=1.0)
 
+        if np.any(self.suppression_mask > 0):
+            suppression_factor = 1.0 - self.suppression_strength * self.suppression_mask
+            suppression_factor = np.clip(suppression_factor, 0.0, 1.0).astype(np.float32)
+            z = torch.clamp(z * torch.from_numpy(suppression_factor), min=0.0, max=1.0)
+
         # From the probability of an ignition in z, new fire locations are
         # randomly generated
         prob_mask = torch.rand_like(z)
         new_fire = (z > prob_mask).float()
+        new_ignitions = int(((np.array(new_fire) == 1) & (prev_fire == 0)).sum())
 
         # These new fire locations are added to the state
         self.state_space[FIRE_INDEX] = np.maximum(
             np.array(new_fire), self.state_space[FIRE_INDEX]
         )
+        self.last_new_ignitions = new_ignitions
+
+        if np.any(self.suppression_mask > 0):
+            self.suppression_mask *= self.suppression_decay
+            self.suppression_mask[self.suppression_mask < 1e-4] = 0.0
 
         if self.debug and self.calibration == "saudi":
             burning_after = int(self.state_space[FIRE_INDEX].sum())
@@ -441,6 +519,7 @@ class FireWorld:
         2. Also stops evacuating any areas that were taking a burned down path
         3. Also decrements the evacuation timestamps
         """
+        self.last_finished_evac_count = 0
         for i in range(len(self.paths)):
             # Decrement path counts and remove path if path is on fire
             if (
@@ -500,6 +579,7 @@ class FireWorld:
                     )
                     self.evacuating_timestamps[update_row, update_col] = np.inf
                     self.finished_evacuating_cells.append([update_row, update_col])
+                    self.last_finished_evac_count += 1
 
                 # No more population centers are using this path, so we delete it
                 if len(self.evacuating_paths[i]) == 0:
@@ -523,9 +603,37 @@ class FireWorld:
         self.state_space[POPULATED_INDEX, enflamed_rows, enflamed_cols] = 0
         self.state_space[EVACUATING_INDEX, enflamed_rows, enflamed_cols] = 0
 
-        # Update reward
-        self.reward -= 100 * len(enflamed_populated_areas)
-        self.reward += len((np.where(fire + evacuating == 0))[0])
+        current_fire_cells = int(self.state_space[FIRE_INDEX].sum())
+        burning_population = int(
+            np.logical_and(
+                self.state_space[FIRE_INDEX] == 1,
+                self.state_space[POPULATED_INDEX] == 1,
+            ).sum()
+        )
+        fire_delta = self.prev_fire_cells - current_fire_cells
+        w = self.reward_weights
+        # Reward signal: dense, smooth, and action-correlated (via suppression affecting spread).
+        # - Positive for reducing burning cells (fire_delta)
+        # - Shaping term: negative proportional to current burning cells
+        # - Penalty for newly ignited cells (spread pressure)
+        # - Smaller population penalties (still important, but not allowed to swamp learning early)
+        self.reward = (
+            w["fire_delta"] * float(fire_delta)
+            - w["burning_cells"] * float(current_fire_cells)
+            - w["new_ignitions"] * float(self.last_new_ignitions)
+            - w["newly_burned_population"] * float(len(enflamed_populated_areas))
+            - w["burning_population"] * float(burning_population)
+            + w["finished_evac"] * float(self.last_finished_evac_count)
+        )
+        self.prev_fire_cells = current_fire_cells
+        self.last_reward_components = {
+            "fire_delta": float(fire_delta),
+            "fire_cells": current_fire_cells,
+            "newly_burned": int(len(enflamed_populated_areas)),
+            "burning_population": burning_population,
+            "finished_evac": int(self.last_finished_evac_count),
+            "new_ignitions": int(self.last_new_ignitions),
+        }
 
     def advance_to_next_timestep(self):
         """
@@ -553,23 +661,25 @@ class FireWorld:
                 pop_cell, path_index = action_val
                 pop_cell_row, pop_cell_col = pop_cell[0], pop_cell[1]
 
-                # Ensure that the path chosen and populated cell haven't
-                # burned down and it's not already evacuating and it has not
-                # already evacuated
-                if (
-                    self.paths[path_index][1]
-                    and self.state_space[POPULATED_INDEX, pop_cell_row, pop_cell_col]
-                    == 1
-                    and self.evacuating_timestamps[pop_cell_row, pop_cell_col] == np.inf
-                ):
+                # Ensure that the path chosen and populated cell haven't burned down.
+                # IMPORTANT: suppression should apply whenever action is taken so the
+                # policy can continuously influence fire spread (not just once).
+                if self.paths[path_index][1]:
+                    # Start evacuation once (only if the population cell still exists).
+                    if (
+                        self.state_space[POPULATED_INDEX, pop_cell_row, pop_cell_col] == 1
+                        and self.evacuating_timestamps[pop_cell_row, pop_cell_col] == np.inf
+                    ):
+                        if path_index in self.evacuating_paths:
+                            self.evacuating_paths[path_index].append(pop_cell)
+                        else:
+                            self.evacuating_paths[path_index] = [pop_cell]
+                        self.state_space[EVACUATING_INDEX, pop_cell_row, pop_cell_col] = 1
+                        self.evacuating_timestamps[pop_cell_row, pop_cell_col] = 10
 
-                    # Add to evacuating paths and update state + timestamp
-                    if path_index in self.evacuating_paths:
-                        self.evacuating_paths[path_index].append(pop_cell)
-                    else:
-                        self.evacuating_paths[path_index] = [pop_cell]
-                    self.state_space[EVACUATING_INDEX, pop_cell_row, pop_cell_col] = 1
-                    self.evacuating_timestamps[pop_cell_row, pop_cell_col] = 10
+                    # Apply/refresh suppression every time the action is chosen,
+                    # even if the population cell burned down (keeps action impactful).
+                    self._apply_action_suppression(pop_cell, path_index)
 
     def get_state_utility(self) -> int:
         """
@@ -603,7 +713,12 @@ class FireWorld:
         """
         Get the status of the simulation.
         """
-        return self.time_step >= 100
+        if self.time_step >= 100:
+            return True
+        if self.terminate_on_population_loss:
+            population_remaining = int(self.state_space[POPULATED_INDEX].sum())
+            return population_remaining == 0
+        return False
 
     def get_finished_evacuating(self) -> list:
         """
