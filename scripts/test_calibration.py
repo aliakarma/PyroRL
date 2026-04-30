@@ -8,13 +8,13 @@ import numpy as np
 import torch
 
 try:
-    from pyrorl.envs import PyroRLEnv
-    from pyrorl.envs.map_helpers.create_map_info import generate_map_info
+    from pyrorl.pyrorl.envs import PyroRLEnv
+    from pyrorl.pyrorl.map_helpers.create_map_info import generate_map_info
 except ModuleNotFoundError:
     repo_root = Path(__file__).resolve().parents[1]
-    sys.path.insert(0, str(repo_root / "pyrorl"))
-    from pyrorl.envs import PyroRLEnv
-    from pyrorl.envs.map_helpers.create_map_info import generate_map_info
+    sys.path.insert(0, str(repo_root))
+    from pyrorl.pyrorl.envs import PyroRLEnv
+    from pyrorl.pyrorl.map_helpers.create_map_info import generate_map_info
 
 
 def build_env_inputs(num_rows: int, num_cols: int, seed: int):
