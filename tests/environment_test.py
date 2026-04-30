@@ -675,6 +675,8 @@ def test_burned_down_path():
     test_world.state_space[FIRE_INDEX, 1, 1] = 1
     test_world.advance_to_next_timestep()
 
+    # Clear fires so suppression doesn't change state_space
+    test_world.state_space[FIRE_INDEX] = 0
     old_evacuating_paths = np.copy(test_world.evacuating_paths)
     old_state_space = np.copy(test_world.state_space)
     old_evacuating_timestamps = np.copy(test_world.evacuating_timestamps)
@@ -704,6 +706,8 @@ def test_burned_down_pop():
     test_world.state_space[FIRE_INDEX, 1, 2] = 1
     test_world.advance_to_next_timestep()
 
+    # Clear fires so suppression doesn't change state_space
+    test_world.state_space[FIRE_INDEX] = 0
     old_evacuating_paths = np.copy(test_world.evacuating_paths)
     old_state_space = np.copy(test_world.state_space)
     old_evacuating_timestamps = np.copy(test_world.evacuating_timestamps)
