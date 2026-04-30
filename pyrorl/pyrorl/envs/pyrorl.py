@@ -2,7 +2,11 @@
 OpenAI Gym Environment Wrapper Class
 """
 
-from pyrorl.envs.environment.environment import FireWorld
+from pyrorl.envs.environment.environment import (
+    FireWorld,
+    POPULATED_INDEX,
+    EVACUATING_INDEX,
+)
 import gymnasium as gym
 from gymnasium import spaces
 import imageio.v2 as imageio
@@ -11,7 +15,7 @@ import os
 import pygame
 import shutil
 import sys
-from typing import Optional, Any
+from typing import Optional, Any, Tuple, List
 
 # Constants for visualization
 IMG_DIRECTORY = "grid_screenshots/"
@@ -34,15 +38,22 @@ class WildfireEvacuationEnv(gym.Env):
         custom_fire_locations: Optional[np.ndarray] = None,
         wind_speed: Optional[float] = None,
         wind_angle: Optional[float] = None,
-        fuel_mean: float = 8.5,
-        fuel_stdev: float = 3,
-        fire_propagation_rate: float = 0.094,
+        fuel_mean: Optional[float] = None,
+        fuel_stdev: Optional[float] = None,
+        fire_propagation_rate: Optional[float] = None,
+        calibration: str = "california",
+        fuel_burn_rate: Optional[float] = None,
+        visibility_radius: Optional[int] = None,
+        dust_intensity: Optional[float] = None,
+        visibility_center: Optional[Tuple[int, int]] = None,
         skip: bool = False,
     ):
         """
         Set up the basic environment and its parameters.
         """
         # Save parameters and set up environment
+        if calibration not in {"california", "saudi"}:
+            raise ValueError("Calibration must be either 'california' or 'saudi'")
         self.num_rows = num_rows
         self.num_cols = num_cols
         self.populated_areas = populated_areas
@@ -51,9 +62,27 @@ class WildfireEvacuationEnv(gym.Env):
         self.custom_fire_locations = custom_fire_locations
         self.wind_speed = wind_speed
         self.wind_angle = wind_angle
+        self.calibration = calibration
+        if fuel_mean is None:
+            fuel_mean = 8.5 if calibration == "california" else 2.2
+        if fuel_stdev is None:
+            fuel_stdev = 3 if calibration == "california" else 0.9
+        if fire_propagation_rate is None:
+            fire_propagation_rate = 0.094
+        if fuel_burn_rate is None:
+            fuel_burn_rate = 1.0 if calibration == "california" else 1.6
+        if dust_intensity is None:
+            dust_intensity = 0.0 if calibration == "california" else 0.45
+        if visibility_radius is None and calibration == "saudi":
+            visibility_radius = max(2, int(min(num_rows, num_cols) * 0.25))
+
         self.fuel_mean = fuel_mean
         self.fuel_stdev = fuel_stdev
         self.fire_propagation_rate = fire_propagation_rate
+        self.fuel_burn_rate = fuel_burn_rate
+        self.visibility_radius = visibility_radius
+        self.dust_intensity = dust_intensity
+        self.visibility_center = visibility_center
         self.skip = skip
         self.fire_env = FireWorld(
             num_rows,
@@ -67,6 +96,8 @@ class WildfireEvacuationEnv(gym.Env):
             fuel_mean=fuel_mean,
             fuel_stdev=fuel_stdev,
             fire_propagation_rate=fire_propagation_rate,
+            calibration=calibration,
+            fuel_burn_rate=fuel_burn_rate,
         )
 
         # Set up action space
@@ -74,7 +105,7 @@ class WildfireEvacuationEnv(gym.Env):
         self.action_space = spaces.Discrete(len(actions))
 
         # Set up observation space
-        observations = self.fire_env.get_state()
+        observations = self._apply_visibility(self.fire_env.get_state())
         self.observation_space = spaces.Box(
             low=0, high=200, shape=observations.shape, dtype=np.float64
         )
@@ -100,9 +131,11 @@ class WildfireEvacuationEnv(gym.Env):
             fuel_mean=self.fuel_mean,
             fuel_stdev=self.fuel_stdev,
             fire_propagation_rate=self.fire_propagation_rate,
+            calibration=self.calibration,
+            fuel_burn_rate=self.fuel_burn_rate,
         )
 
-        state_space = self.fire_env.get_state()
+        state_space = self._apply_visibility(self.fire_env.get_state())
         return state_space, {"": ""}
 
     def step(self, action: int) -> tuple:
@@ -114,10 +147,50 @@ class WildfireEvacuationEnv(gym.Env):
         self.fire_env.advance_to_next_timestep()
 
         # Gather observations and rewards
-        observations = self.fire_env.get_state()
+        observations = self._apply_visibility(self.fire_env.get_state())
         rewards = self.fire_env.get_state_utility()
         terminated = self.fire_env.get_terminated()
         return observations, rewards, terminated, False, {"": ""}
+
+    def _apply_visibility(self, state_space: np.ndarray) -> np.ndarray:
+        if self.visibility_radius is None:
+            return state_space
+
+        rows, cols = state_space.shape[1], state_space.shape[2]
+        effective_radius = self.visibility_radius
+        if self.dust_intensity > 0:
+            effective_radius = max(
+                1, int(round(self.visibility_radius * (1.0 - self.dust_intensity)))
+            )
+        if effective_radius >= max(rows, cols):
+            return state_space
+
+        mask = np.zeros((rows, cols), dtype=bool)
+        centers = self._visibility_centers(state_space)
+        row_idx = np.arange(rows)[:, None]
+        col_idx = np.arange(cols)[None, :]
+        for center in centers:
+            center_row, center_col = center
+            dist2 = (row_idx - center_row) ** 2 + (col_idx - center_col) ** 2
+            mask |= dist2 <= effective_radius**2
+
+        masked_state = np.copy(state_space)
+        masked_state[:, ~mask] = 0
+        return masked_state
+
+    def _visibility_centers(self, state_space: np.ndarray) -> List[Tuple[int, int]]:
+        if self.visibility_center is not None:
+            return [self.visibility_center]
+
+        population_mask = np.logical_or(
+            state_space[POPULATED_INDEX] == 1,
+            state_space[EVACUATING_INDEX] == 1,
+        )
+        rows, cols = np.where(population_mask)
+        if rows.size > 0:
+            return list(zip(rows.tolist(), cols.tolist()))
+
+        return [(state_space.shape[1] // 2, state_space.shape[2] // 2)]
 
     def render_hf(
         self, screen: pygame.Surface, font: pygame.font.Font
@@ -263,3 +336,6 @@ class WildfireEvacuationEnv(gym.Env):
         images = [imageio.imread(IMG_DIRECTORY + f + ".png") for f in files]
         imageio.mimsave("training.gif", images, loop=0)
         shutil.rmtree(IMG_DIRECTORY)
+
+
+PyroRLEnv = WildfireEvacuationEnv

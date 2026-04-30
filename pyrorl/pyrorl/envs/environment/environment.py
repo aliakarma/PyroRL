@@ -39,9 +39,11 @@ class FireWorld:
         custom_fire_locations: Optional[np.ndarray] = None,
         wind_speed: Optional[float] = None,
         wind_angle: Optional[float] = None,
-        fuel_mean: float = 8.5,
-        fuel_stdev: float = 3,
-        fire_propagation_rate: float = 0.094,
+        fuel_mean: Optional[float] = None,
+        fuel_stdev: Optional[float] = None,
+        fire_propagation_rate: Optional[float] = None,
+        calibration: str = "california",
+        fuel_burn_rate: Optional[float] = None,
     ):
         """
         The constructor defines the state and action space, initializes the fires,
@@ -55,6 +57,22 @@ class FireWorld:
             raise ValueError("Number of rows should be positive!")
         if num_fire_cells < 1:
             raise ValueError("Number of fire cells should be positive!")
+
+        # Calibration controls default parameters and models
+        if calibration not in {"california", "saudi"}:
+            raise ValueError("Calibration must be either 'california' or 'saudi'")
+        self.calibration = calibration
+
+        # Resolve defaults based on calibration
+        if fuel_mean is None:
+            fuel_mean = 8.5 if calibration == "california" else 2.2
+        if fuel_stdev is None:
+            fuel_stdev = 3 if calibration == "california" else 0.9
+        if fire_propagation_rate is None:
+            fire_propagation_rate = 0.094
+        if fuel_burn_rate is None:
+            fuel_burn_rate = 1.0 if calibration == "california" else 1.6
+        self.fuel_burn_rate = fuel_burn_rate
 
         # Check that populated areas are within the grid
         valid_populated_areas = (
@@ -152,11 +170,9 @@ class FireWorld:
                 ] = 1
 
         # Initialize fuel levels
-        # Note: make the fire spread parameters to constants?
-        num_values = num_rows * num_cols
-        self.state_space[FUEL_INDEX] = np.random.normal(
-            fuel_mean, fuel_stdev, num_values
-        ).reshape((num_rows, num_cols))
+        self.state_space[FUEL_INDEX] = self._initialize_fuel_map(
+            num_rows, num_cols, fuel_mean, fuel_stdev
+        )
 
         # Initialize populated areas
         pop_rows, pop_cols = populated_areas[:, 0], populated_areas[:, 1]
@@ -179,29 +195,141 @@ class FireWorld:
         # Set the timestep
         self.time_step = 0
 
-        # set fire mask
+        # Set terrain influence (dunes for Saudi calibration)
+        self.terrain_spread_factor = None
+        if calibration == "saudi":
+            terrain = self._build_dune_terrain(num_rows, num_cols)
+            self.terrain_spread_factor = self._build_terrain_spread_factor(terrain)
+
+        # Set fire mask
         self.fire_mask = set_fire_mask(fire_propagation_rate)
 
-        # Factor in wind speeds
-        if wind_speed is not None or wind_angle is not None:
+        # Factor in wind speeds or Shamal wind regime
+        self.wind_speed = wind_speed
+        self.wind_angle = wind_angle
+        self.wind_model = "none"
+        if calibration == "saudi" and wind_speed is None and wind_angle is None:
+            self.wind_model = "shamal"
+            self._update_shamal_wind_mask()
+        elif wind_speed is not None or wind_angle is not None:
             if wind_speed is None or wind_angle is None:
                 raise TypeError(
                     "When setting wind details, "
                     "wind speed and wind angle must both be provided"
                 )
-            self.fire_mask = linear_wind_transform(wind_speed, wind_angle)
+            self.wind_model = "static"
+            self.fire_mask = torch.as_tensor(
+                linear_wind_transform(wind_speed, wind_angle)
+            )
         else:
             self.fire_mask = torch.from_numpy(self.fire_mask)
 
         # Record which population cells have finished evacuating
         self.finished_evacuating_cells = []
 
+    def _initialize_fuel_map(
+        self, num_rows: int, num_cols: int, fuel_mean: float, fuel_stdev: float
+    ) -> np.ndarray:
+        base_fuel = np.random.normal(fuel_mean, fuel_stdev, (num_rows, num_cols))
+        base_fuel = np.clip(base_fuel, 0, None)
+
+        if self.calibration == "saudi":
+            cluster_map = self._build_oasis_clusters(num_rows, num_cols)
+            base_fuel = base_fuel * 0.35 + cluster_map
+
+        return np.clip(base_fuel, 0, None)
+
+    def _build_oasis_clusters(self, num_rows: int, num_cols: int) -> np.ndarray:
+        rng = np.random.default_rng()
+        cluster_count = max(3, int(min(num_rows, num_cols) / 3))
+        cluster_radius = max(2.0, min(num_rows, num_cols) * 0.12)
+        cluster_peak = 6.0
+
+        rows = np.arange(num_rows)[:, None]
+        cols = np.arange(num_cols)[None, :]
+        cluster_map = np.zeros((num_rows, num_cols), dtype=float)
+
+        for _ in range(cluster_count):
+            center_row = rng.integers(0, num_rows)
+            center_col = rng.integers(0, num_cols)
+            dist2 = (rows - center_row) ** 2 + (cols - center_col) ** 2
+            cluster_map += cluster_peak * np.exp(
+                -dist2 / (2 * (cluster_radius**2))
+            )
+
+        return cluster_map
+
+    @staticmethod
+    def dune_profile(
+        x: np.ndarray,
+        y: np.ndarray,
+        ridge_spacing: float = 12.0,
+        ridge_width: float = 3.5,
+        curvature: float = 0.02,
+        crescent_shift: float = 2.5,
+        amplitude: float = 1.0,
+        orientation: float = np.deg2rad(315.0),
+    ) -> np.ndarray:
+        cos_a = np.cos(orientation)
+        sin_a = np.sin(orientation)
+        u = x * cos_a + y * sin_a
+        v = -x * sin_a + y * cos_a
+
+        phase = (u % ridge_spacing) - ridge_spacing / 2.0
+        curved_phase = phase - curvature * (v**2)
+
+        ridge = np.exp(-(curved_phase**2) / (2 * (ridge_width**2)))
+        crescent = ridge - 0.6 * np.exp(
+            -((curved_phase + crescent_shift) ** 2)
+            / (2 * ((ridge_width * 0.9) ** 2))
+        )
+        return amplitude * np.maximum(crescent, 0.0)
+
+    def _build_dune_terrain(self, num_rows: int, num_cols: int) -> np.ndarray:
+        x_coords, y_coords = np.meshgrid(np.arange(num_cols), np.arange(num_rows))
+        elevation = self.dune_profile(x_coords, y_coords)
+        elevation = (elevation - elevation.min()) / (
+            elevation.max() - elevation.min() + 1e-6
+        )
+        return elevation
+
+    def _build_terrain_spread_factor(
+        self, elevation: np.ndarray, corridor_gain: float = 0.45
+    ) -> torch.Tensor:
+        elevation = (elevation - elevation.min()) / (
+            elevation.max() - elevation.min() + 1e-6
+        )
+        factor = 1.0 + (1.0 - elevation) * corridor_gain
+        return torch.from_numpy(factor.astype(np.float32))
+
+    def _sample_shamal_wind(self) -> Tuple[float, float]:
+        base_speed = 22.0
+        speed = max(0.0, np.random.normal(base_speed, 6.0))
+        angle = np.deg2rad(135.0) + np.random.normal(0.0, np.deg2rad(12.0))
+
+        if np.random.random() < 0.25:
+            speed += np.random.uniform(8.0, 18.0)
+            angle += np.random.normal(0.0, np.deg2rad(25.0))
+
+        return speed, angle
+
+    def _update_shamal_wind_mask(self) -> None:
+        speed, angle = self._sample_shamal_wind()
+        self.wind_speed = speed
+        self.wind_angle = angle
+        self.fire_mask = torch.as_tensor(linear_wind_transform(speed, angle))
+
     def sample_fire_propogation(self):
         """
         Sample the next state of the wildfire model.
         """
+        if self.wind_model == "shamal":
+            self._update_shamal_wind_mask()
+
         # Drops fuel level of enflamed cells
-        self.state_space[FUEL_INDEX, self.state_space[FIRE_INDEX] == 1] -= 1
+        self.state_space[FUEL_INDEX, self.state_space[FIRE_INDEX] == 1] -= (
+            self.fuel_burn_rate
+        )
         self.state_space[FUEL_INDEX, self.state_space[FUEL_INDEX] < 0] = 0
 
         # Extinguishes cells that have run out of fuel
@@ -221,6 +349,8 @@ class FireWorld:
         z[z == 0] = 1
         z = z.prod(dim=0)
         z = 1 - z.reshape(self.state_space[FIRE_INDEX].shape)
+        if self.terrain_spread_factor is not None:
+            z = torch.clamp(z * self.terrain_spread_factor, min=0.0, max=1.0)
 
         # From the probability of an ignition in z, new fire locations are
         # randomly generated

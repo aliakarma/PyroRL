@@ -45,6 +45,21 @@ for _ in range(10):
     print("Reward: " + str(reward))
 ```
 
+    You can also toggle calibration modes to switch between California-style forests and Saudi desert dynamics:
+
+    ```python
+    from pyrorl.envs import PyroRLEnv
+
+    env = PyroRLEnv(
+        num_rows=num_rows,
+        num_cols=num_cols,
+        populated_areas=populated_areas,
+        paths=paths,
+        paths_to_pops=paths_to_pops,
+        calibration="saudi",
+    )
+    ```
+
 A compiled visualization of numerous iterations is seen below. For more examples, check out the `examples/` folder.
 
 ![Example Visualization of PyroRL](imgs/example_visualization.gif)
