@@ -9,6 +9,7 @@ from typing import Optional, Any, Tuple, Dict, List
 
 # For wind bias
 from .environment_constant import set_fire_mask, linear_wind_transform
+from .calibration_config import get_config
 
 """
 Indices corresponding to each layer of state
@@ -65,16 +66,17 @@ class FireWorld:
         if calibration not in {"california", "saudi"}:
             raise ValueError("Calibration must be either 'california' or 'saudi'")
         self.calibration = calibration
+        config = get_config(calibration)
 
-        # Resolve defaults based on calibration
+        # Resolve defaults from config — user overrides take precedence
         if fuel_mean is None:
-            fuel_mean = 8.5 if calibration == "california" else 3.5
+            fuel_mean = config.fuel_mean
         if fuel_stdev is None:
-            fuel_stdev = 3 if calibration == "california" else 1.3
+            fuel_stdev = config.fuel_stdev
         if fire_propagation_rate is None:
-            fire_propagation_rate = 0.094
+            fire_propagation_rate = config.fire_propagation_rate
         if fuel_burn_rate is None:
-            fuel_burn_rate = 1.0 if calibration == "california" else 1.0
+            fuel_burn_rate = config.fuel_burn_rate
         self.fuel_burn_rate = fuel_burn_rate
         self.debug = debug
         self.terminate_on_population_loss = terminate_on_population_loss
@@ -107,25 +109,15 @@ class FireWorld:
         self.state_space = np.zeros([5, num_rows, num_cols])
         self.suppression_mask = np.zeros((num_rows, num_cols), dtype=np.float32)
         self.suppression_decay = 0.85
-        self.suppression_strength = 0.55 if calibration == "california" else 0.6
-        self.suppression_radius = 1 if calibration == "california" else 2
+        self.suppression_strength = config.suppression_strength
+        self.suppression_radius = config.suppression_radius
         # Besides reducing future spread probability, suppression can actively extinguish
         # existing burning cells in the treated zone. Without this, actions can be too
         # weak relative to stochastic spread for PPO to learn from.
-        self.suppression_extinguish_prob = 0.55 if calibration == "california" else 0.45
+        self.suppression_extinguish_prob = config.suppression_extinguish_prob
         self.last_finished_evac_count = 0
         self.last_new_ignitions = 0
-        self.reward_weights = reward_weights or {
-            # Dense fire-shaped reward.
-            # Keep weights modest to avoid domination by any single term.
-            "fire_delta": 1.0,  # + when burning cells decrease
-            "burning_cells": 0.10,  # shaping: reward includes -w * burning_cells
-            "new_ignitions": 0.05,  # penalty for spread events each step
-            # Population-related costs (kept smaller than before to avoid overwhelming fire signal)
-            "newly_burned_population": 15.0,
-            "burning_population": 3.0,
-            "finished_evac": 8.0,
-        }
+        self.reward_weights = reward_weights or config.reward_weights
         self.last_reward_components = {
             "fire_delta": 0.0,
             "fire_cells": 0,
