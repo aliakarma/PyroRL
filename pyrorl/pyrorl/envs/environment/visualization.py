@@ -7,7 +7,7 @@ do **not** import or modify any environment state.
 
 Usage::
 
-    from pyrorl.envs.environment.visualization import (
+    from pyrorl.pyrorl.envs.environment.visualization import (
         plot_fuel_map,
         plot_terrain,
         plot_wind_field,
