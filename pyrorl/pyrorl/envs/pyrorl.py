@@ -2,14 +2,14 @@
 OpenAI Gym Environment Wrapper Class
 """
 
-from pyrorl.envs.environment.environment import (
+from .environment.environment import (
     FireWorld,
     FIRE_INDEX,
     POPULATED_INDEX,
     EVACUATING_INDEX,
 )
-from pyrorl.envs.environment.calibration_config import get_config
-from pyrorl.envs.environment.scenarios import apply_scenario, AVAILABLE_SCENARIOS
+from .environment.calibration_config import get_config
+from .environment.scenarios import apply_scenario, AVAILABLE_SCENARIOS
 import gymnasium as gym
 from gymnasium import spaces
 import imageio.v2 as imageio
