@@ -75,7 +75,7 @@ def save_map_info(
         os.makedirs(maps_info_directory)
 
     # make a new subdirectory for the current map's information
-    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
     current_map_directory = os.path.join(maps_info_directory, timestamp)
     os.makedirs(current_map_directory)
 

@@ -12,10 +12,10 @@ Usage:
 """
 
 import argparse
-import importlib
 import csv
 import os
 import random
+import sys
 from collections import Counter
 from pathlib import Path
 
@@ -26,26 +26,12 @@ from stable_baselines3 import PPO
 from stable_baselines3.common.callbacks import BaseCallback
 from stable_baselines3.common.monitor import Monitor
 
-# Ensure PyroRL is importable
-import sys
+# Add repo root to sys.path so the nested package resolves correctly
+repo_root = Path(__file__).resolve().parents[1]
+if str(repo_root) not in sys.path:
+    sys.path.insert(0, str(repo_root))
 
-# Add parent directory to path if needed
-repo_root = Path(__file__).parent.parent
-
-# Prefer loading the local source tree even if an older `pyrorl` is installed.
-local_pkg_root = repo_root / "pyrorl"
-local_env_path = local_pkg_root / "pyrorl" / "envs" / "pyrorl.py"
-if local_env_path.exists():
-    sys.path.insert(0, str(local_pkg_root))
-    spec = importlib.util.spec_from_file_location("pyrorl_local_env", str(local_env_path))
-    if spec is None or spec.loader is None:
-        raise RuntimeError(f"Could not load local env module from {local_env_path}")
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    PyroRLEnv = module.PyroRLEnv
-else:
-    # Fallback to installed package import.
-    PyroRLEnv = importlib.import_module("pyrorl.pyrorl.envs").PyroRLEnv
+from pyrorl.pyrorl.envs.pyrorl import PyroRLEnv
 
 
 def linear_lr_schedule(

@@ -11,9 +11,9 @@ Usage:
 """
 
 import argparse
-import importlib
 import os
 import random
+import sys
 from pathlib import Path
 
 import numpy as np
@@ -21,24 +21,13 @@ import torch
 from stable_baselines3 import PPO
 
 # ---------------------------------------------------------------------------
-# Import PyroRLEnv (same local-source-first logic as train_ppo.py)
+# Import PyroRLEnv
 # ---------------------------------------------------------------------------
-import sys
+repo_root = Path(__file__).resolve().parents[1]
+if str(repo_root) not in sys.path:
+    sys.path.insert(0, str(repo_root))
 
-repo_root = Path(__file__).parent.parent
-
-local_pkg_root = repo_root / "pyrorl"
-local_env_path = local_pkg_root / "pyrorl" / "envs" / "pyrorl.py"
-if local_env_path.exists():
-    sys.path.insert(0, str(local_pkg_root))
-    spec = importlib.util.spec_from_file_location("pyrorl_local_env", str(local_env_path))
-    if spec is None or spec.loader is None:
-        raise RuntimeError(f"Could not load local env module from {local_env_path}")
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    PyroRLEnv = module.PyroRLEnv
-else:
-    PyroRLEnv = importlib.import_module("pyrorl.pyrorl.envs").PyroRLEnv
+from pyrorl.pyrorl.envs.pyrorl import PyroRLEnv
 
 
 # ---------------------------------------------------------------------------

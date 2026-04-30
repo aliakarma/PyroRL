@@ -3,7 +3,7 @@ Unit tests for each of the functions in create_map_info.py
 """
 
 import numpy as np
-from pyrorl.map_helpers.create_map_info import (
+from pyrorl.pyrorl.map_helpers.create_map_info import (
     generate_map_info,
     MAP_DIRECTORY,
     load_map_info,
