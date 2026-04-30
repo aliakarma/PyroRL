@@ -1,1 +1,1 @@
-from pyrorl.envs.pyrorl import WildfireEvacuationEnv, PyroRLEnv
+from .pyrorl import WildfireEvacuationEnv, PyroRLEnv
