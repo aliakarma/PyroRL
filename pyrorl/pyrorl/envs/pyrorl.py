@@ -8,6 +8,8 @@ from pyrorl.envs.environment.environment import (
     POPULATED_INDEX,
     EVACUATING_INDEX,
 )
+from pyrorl.envs.environment.calibration_config import get_config
+from pyrorl.envs.environment.scenarios import apply_scenario, AVAILABLE_SCENARIOS
 import gymnasium as gym
 from gymnasium import spaces
 import imageio.v2 as imageio
@@ -42,6 +44,7 @@ class WildfireEvacuationEnv(gym.Env):
         fuel_stdev: Optional[float] = None,
         fire_propagation_rate: Optional[float] = None,
         calibration: str = "california",
+        scenario: Optional[str] = None,
         fuel_burn_rate: Optional[float] = None,
         visibility_radius: Optional[int] = None,
         dust_intensity: Optional[float] = None,
@@ -66,18 +69,21 @@ class WildfireEvacuationEnv(gym.Env):
         self.wind_speed = wind_speed
         self.wind_angle = wind_angle
         self.calibration = calibration
+        config = get_config(calibration)
         if fuel_mean is None:
-            fuel_mean = 8.5 if calibration == "california" else 3.5
+            fuel_mean = config.fuel_mean
         if fuel_stdev is None:
-            fuel_stdev = 3 if calibration == "california" else 1.3
+            fuel_stdev = config.fuel_stdev
         if fire_propagation_rate is None:
-            fire_propagation_rate = 0.094
+            fire_propagation_rate = config.fire_propagation_rate
         if fuel_burn_rate is None:
-            fuel_burn_rate = 1.0 if calibration == "california" else 1.0
+            fuel_burn_rate = config.fuel_burn_rate
         if dust_intensity is None:
-            dust_intensity = 0.0 if calibration == "california" else 0.45
-        if visibility_radius is None and calibration == "saudi":
-            visibility_radius = max(2, int(min(num_rows, num_cols) * 0.25))
+            dust_intensity = config.visibility_params["dust_intensity"]
+        if visibility_radius is None:
+            visibility_radius = config.visibility_radius
+            if visibility_radius is None and calibration == "saudi":
+                visibility_radius = max(2, int(min(num_rows, num_cols) * 0.25))
 
         self.fuel_mean = fuel_mean
         self.fuel_stdev = fuel_stdev
@@ -90,6 +96,7 @@ class WildfireEvacuationEnv(gym.Env):
         self.reward_weights = reward_weights
         self.debug = debug
         self.skip = skip
+        self.scenario = scenario
         self.fire_env = FireWorld(
             num_rows,
             num_cols,
@@ -108,6 +115,10 @@ class WildfireEvacuationEnv(gym.Env):
             terminate_on_population_loss=terminate_on_population_loss,
             debug=debug,
         )
+
+        # Apply scenario modifications (after FireWorld is constructed)
+        if self.scenario is not None:
+            apply_scenario(self, self.scenario)
 
         # Set up action space
         actions = self.fire_env.get_actions()
@@ -150,6 +161,10 @@ class WildfireEvacuationEnv(gym.Env):
             terminate_on_population_loss=self.terminate_on_population_loss,
             debug=self.debug,
         )
+
+        # Apply scenario modifications on every reset
+        if self.scenario is not None:
+            apply_scenario(self, self.scenario)
 
         state_space = self._apply_visibility(self.fire_env.get_state())
         return state_space, {"": ""}
