@@ -7,7 +7,7 @@ conditions without touching training logic.
 
 Usage::
 
-    from pyrorl.envs.environment.scenarios import apply_scenario
+    from pyrorl.pyrorl.envs.environment.scenarios import apply_scenario
 
     # Called automatically by WildfireEvacuationEnv when scenario is set
     apply_scenario(env, "high_wind")
