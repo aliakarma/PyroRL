@@ -11,13 +11,44 @@
 
 PyroRL is a new reinforcement learning environment built for the simulation of wildfire evacuation. Check out the [docs](https://sisl.github.io/PyroRL/) and the [demo](https://www.youtube.com/embed/Pt4cI5jBbKo).
 
-## How to Use
+## Project Overview
 
-First, install our package. Note that PyroRL requires Python version 3.8:
+This project extends PyroRL with:
+- **Saudi/desert calibration**: Arid fuel models, dune-aware terrain, and Shamal wind regimes.
+- **Scenario-based evaluation**: Structured perturbation scenarios (e.g., high wind, oasis cluster).
+- **Statistical validation**: Rigorous multi-episode evaluation reporting mean, standard deviation, and 95% confidence intervals.
+- **Failure mode analysis**: Automated heuristics to classify why policies fail out-of-distribution.
+
+**Core contribution:** Evaluating RL policy robustness under environment distribution shift.
+
+## Installation
 
 ```bash
-pip install pyrorl
+git clone https://github.com/aliakarma/PyroRL
+cd PyroRL
+pip install stable-baselines3 gymnasium numpy matplotlib torch scipy
 ```
+
+## Project Structure
+
+```text
+PyroRL/
+├── pyrorl/          # Core environment, calibration, and scenario logic
+├── scripts/         # Training and evaluation pipeline scripts
+├── tests/           # Regression and unit tests
+├── checkpoints/     # Trained PPO models (.zip)
+├── logs/            # Statistical evaluation CSV outputs
+├── docs/            # Documentation website source
+├── examples/        # Introductory usage examples
+├── paper/           # Academic paper materials
+├── README.md        # This file
+├── LICENSE          # MIT License
+└── .gitignore       # Version control rules
+```
+
+## How to Use
+
+Note that PyroRL requires Python version 3.8+:
 
 To use our wildfire evacuation environment, define the dimensions of your grid, where the populated areas are, the paths, and which populated areas can use which path. See an example below.
 
@@ -47,18 +78,6 @@ for _ in range(10):
 
     You can also toggle calibration modes to switch between California-style forests and Saudi desert dynamics:
 
-    ```python
-    from pyrorl.pyrorl.envs import PyroRLEnv
-
-    env = PyroRLEnv(
-        num_rows=num_rows,
-        num_cols=num_cols,
-        populated_areas=populated_areas,
-        paths=paths,
-        paths_to_pops=paths_to_pops,
-        calibration="saudi",
-    )
-    ```
 
 A compiled visualization of numerous iterations is seen below. For more examples, check out the `examples/` folder.
 
@@ -150,91 +169,133 @@ If instability occurs:
 2. Verify fuel distribution with debug stats
 3. Adjust calibration parameters (fuel_mean, fuel_stdev, fire_propagation_rate)
 
-## PPO Sanity Check
+## Training Pipeline
 
-Before scaling training to cloud infrastructure, verify that reinforcement learning can learn meaningful behavior on PyroRL with PPO.
+The repository includes scripts to train robust models on different environment calibrations.
 
-### Install Dependencies
-
-Ensure you have Stable-Baselines3 and plotting tools:
+### Train California model
 
 ```bash
-pip install stable-baselines3 matplotlib pandas tensorboard
-```
-
-### Run Training (California)
-
-Train a PPO agent on California calibration for 50,000 timesteps:
-
-```bash
-python scripts/train_ppo.py --calibration california --timesteps 50000
-```
-
-### Run Training (Saudi)
-
-Train a PPO agent on Saudi calibration for 50,000 timesteps:
-
-```bash
-python scripts/train_ppo.py --calibration saudi --timesteps 50000
-```
-
-### Training Options
-
-```bash
-# Custom timesteps
 python scripts/train_ppo.py --calibration california --timesteps 100000
+```
+Then, save the best model:
+```bash
+# Windows
+rename checkpoints\best_model.zip ppo_california.zip
 
-# Custom seed for reproducibility
-python scripts/train_ppo.py --calibration saudi --seed 123
-
-# Custom checkpoint directory
-python scripts/train_ppo.py --save_path my_models/
+# Linux/macOS
+mv checkpoints/best_model.zip checkpoints/ppo_california.zip
 ```
 
-### What to Expect
+### Train Saudi model
 
-This sanity check verifies that:
+```bash
+python scripts/train_ppo.py --calibration saudi --timesteps 100000
+```
+Then, save the best model:
+```bash
+mv checkpoints/best_model.zip checkpoints/ppo_saudi.zip
+```
 
-1. **Training doesn't crash**: Environment, model, and monitoring work together
-2. **Rewards trend upward**: Average reward over episodes should increase (even slightly)
-3. **Model learns calibration differences**: California and Saudi should show different learning curves
-4. **Convergence is reasonable**: Learning should stabilize by ~50k timesteps
+## Scenario System
 
-### Output
+The scenario system allows for evaluating policies under specific environmental perturbations. 
+Available scenarios:
+* `high_wind`: Increases wind magnitude and gust probability.
+* `low_fuel`: Reduces global fuel density.
+* `oasis_cluster`: Creates concentrated clusters of dense fuel in sparse areas.
+* `multi_ignition`: Spawns secondary fires simultaneously.
+* `narrow_corridor`: Restricts paths and populates narrow traversal areas.
 
-Training produces:
+Example usage in code:
+```python
+from pyrorl.pyrorl.envs.pyrorl import PyroRLEnv
+env = PyroRLEnv(calibration="saudi", scenario="high_wind")
+```
 
-- **Model checkpoint**: `checkpoints/ppo_{calibration}.zip`
-- **Training logs**: `logs/{calibration}_ppo/` (TensorBoard-compatible)
-- **Monitor data**: Episode rewards and lengths in `monitor.csv`
-- **Reward curve plot**: `logs/{calibration}_ppo/{calibration}_reward_curve.png`
+## Statistical Evaluation
 
-### Interpretation
+To evaluate a specific policy against a scenario and collect statistical significance bounds:
 
-- **Reward trend**: Look for upward trajectory in reward curve (noisy is okay)
-- **Episode length**: May increase or decrease depending on learned policy
-- **Evaluation**: 5 deterministic rollouts shown at end; should be consistent with training trend
-- **Difference between calibrations**: California typically shows faster learning (denser rewards)
+```bash
+python scripts/evaluate_scenarios.py \
+  --model checkpoints/ppo_california.zip \
+  --calibration saudi \
+  --scenario high_wind \
+  --episodes 30
+```
+This computes and reports the **mean reward**, **standard deviation**, and **95% confidence interval**, enabling rigorous research documentation.
 
-### Hyperparameters
+## Scenario Matrix Experiment
 
-Default hyperparameters are conservative and chosen for stability:
+Run a comprehensive evaluation comparing the California-trained policy vs. the Saudi-trained policy across all defined scenarios:
 
-- Learning rate: 3e-4
-- n_steps: 2048 (episode length before update)
-- batch_size: 64
-- gamma: 0.99 (discount factor)
+```bash
+python scripts/run_scenario_matrix.py \
+  --ca_model checkpoints/ppo_california.zip \
+  --sa_model checkpoints/ppo_saudi.zip \
+  --episodes 30
+```
 
-For more aggressive learning, increase learning_rate or reduce batch_size (see Stable-Baselines3 docs).
+This experiment calculates the performance drop and outputs the results to:
+* `logs/scenario_matrix.csv` (Summary statistics)
+* `logs/scenario_matrix_detail.csv` (Per-episode raw metrics)
 
-### Next Steps
+## Failure Mode Analysis
 
-After confirming sanity check passes:
+To analyze *why* a specific model is failing under different scenarios, run the automated heuristic classifier:
 
-1. Scale timesteps for better convergence (500k - 1M)
-2. Tune hyperparameters for your specific calibration
-3. Deploy to cloud for distributed training
+```bash
+python scripts/analyze_failure_modes.py \
+  --model checkpoints/ppo_california.zip \
+  --episodes 30
+```
+
+This tracks spread velocity, action entropy, and suppression effectiveness to classify failures as:
+* **underestimates spread**: The fire grows rapidly out of control.
+* **environment sensitivity**: High variance in episode outcomes.
+* **policy collapse**: Agent actions become random or locked to a single useless action.
+* **action mismatch**: Suppression actions are attempted but are highly ineffective.
+* **none**: The policy succeeds.
+
+## Results Summary
+
+Key findings from our cross-calibration evaluation:
+* The **SA-trained policy** systematically outperforms the CA-trained policy across all Saudi desert scenarios.
+* The largest performance gap is observed in the **`oasis_cluster`** scenario.
+* The CA-trained model predominantly fails due to **underestimating spread**; its assumptions about continuous fuel distribution cause catastrophic failures in sparse, clustered terrain.
+* All findings are statistically significant, validated via 95% Confidence Intervals across 30+ episodes.
+
+## Reproducibility
+
+This repository guarantees reproducibility through:
+* **Fixed Seeds**: Scripts enforce `seed` propagation to numpy, torch, and Python standard libraries.
+* **Deterministic Evaluation**: Evaluation steps use `deterministic=True` for action selection.
+* **Comprehensive Logs**: CSV outputs and TensorBoard events are tracked.
+* **Included Models**: Pre-trained model checkpoints are tracked in the repository for immediate evaluation.
+
+## Notes / Troubleshooting
+
+### Import issues
+If you encounter `ModuleNotFoundError` or relative import errors when running scripts from different directories, insert the project root into your path:
+```python
+import sys
+sys.path.append(".")
+```
+
+### NumPy loading issue
+If you encounter a `ValueError` related to loading numpy arrays in PyTorch when loading checkpoints, retrain the models locally in the same environment:
+```bash
+python scripts/train_ppo.py --calibration saudi --timesteps 100000
+```
 
 ## How to Contribute
 
 For information on how to contribute, check out our [contribution guide](https://sisl.github.io/PyroRL/contribution-guide/).
+
+## Repository Status
+
+This repository is structured for:
+* reproducible experiments
+* research evaluation
+* academic submission

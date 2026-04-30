@@ -1,27 +1,34 @@
-# Standard elements to remove
-__pycache__
-.pytest_cache
-frontend/
-.DS_Store
-env/
+# Caches
+__pycache__/
+.pytest_cache/
+.mypy_cache/
+*.pyc
+*.pyo
 
-# Elements associated with publishing as a package
-pyrorl/pyrorl.egg-info/
-pyrorl/.pypirc
-pyrorl/dist/
-pyrorl/build/
+# Environments
+.env
+.venv/
 
-# Created when training a policy
-sample_baseline.zip
+# Package outputs
+*.egg-info/
+build/
+dist/
 
-# Documentation
-docs/site/
-
-# Code coverage reports
-.coverage
-
-# Creating a GIF for the visualization
+# Output artifacts
 grid_screenshots/
+imgs/
+pyrorl/imgs/
 
-# Don't need to update training.gif every time
-examples/training.gif
+# Logs (keep only final results)
+logs/*
+!logs/scenario_matrix.csv
+!logs/failure_modes.csv
+!logs/scenario_matrix_detail.csv
+
+# Media & data
+*.png
+*.jpg
+
+# Checkpoints (keep trained models)
+checkpoints/*
+!checkpoints/*.zip
