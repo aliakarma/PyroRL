@@ -26,7 +26,7 @@ This project extends PyroRL with:
 ```bash
 git clone https://github.com/aliakarma/PyroRL
 cd PyroRL
-pip install stable-baselines3 gymnasium numpy matplotlib torch scipy
+pip install -e .
 ```
 
 ## Project Structure
@@ -46,44 +46,6 @@ PyroRL/
 └── .gitignore       # Version control rules
 ```
 
-## How to Use
-
-Note that PyroRL requires Python version 3.8+:
-
-To use our wildfire evacuation environment, define the dimensions of your grid, where the populated areas are, the paths, and which populated areas can use which path. See an example below.
-
-```python
-# Create environment
-kwargs = {
-    'num_rows': num_rows,
-    'num_cols': num_cols,
-    'populated_areas': populated_areas,
-    'paths': paths,
-    'paths_to_pops': paths_to_pops
-}
-env = gymnasium.make('pyrorl/PyroRL-v0', **kwargs)
-
-# Run a simple loop of the environment
-env.reset()
-for _ in range(10):
-
-    # Take action and observation
-    action = env.action_space.sample()
-    observation, reward, terminated, truncated, info = env.step(action)
-
-    # Render environment and print reward
-    env.render()
-    print("Reward: " + str(reward))
-```
-
-    You can also toggle calibration modes to switch between California-style forests and Saudi desert dynamics:
-
-
-A compiled visualization of numerous iterations is seen below. For more examples, check out the `examples/` folder.
-
-![Example Visualization of PyroRL](imgs/example_visualization.gif)
-
-For a more comprehensive tutorial, check out the [quickstart](https://sisl.github.io/PyroRL/quickstart/) page on our docs website.
 
 ## Testing California vs Saudi Calibration
 
@@ -271,14 +233,7 @@ This repository guarantees reproducibility through:
 * **Comprehensive Logs**: CSV outputs and TensorBoard events are tracked.
 * **Included Models**: Pre-trained model checkpoints are tracked in the repository for immediate evaluation.
 
-## Notes / Troubleshooting
 
-### Import issues
-If you encounter `ModuleNotFoundError` or relative import errors when running scripts from different directories, insert the project root into your path:
-```python
-import sys
-sys.path.append(".")
-```
 
 ### NumPy loading issue
 If you encounter a `ValueError` related to loading numpy arrays in PyTorch when loading checkpoints, retrain the models locally in the same environment:
