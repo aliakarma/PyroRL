@@ -7,7 +7,7 @@ instead of scattered ``if calibration == ...`` branches.
 
 Usage::
 
-    from pyrorl.envs.environment.calibration_config import get_config
+    from pyrorl.pyrorl.envs.environment.calibration_config import get_config
 
     config = get_config("saudi")
     print(config.fuel_mean)   # 3.5
