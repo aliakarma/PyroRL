@@ -44,6 +44,7 @@ class FireWorld:
         fire_propagation_rate: Optional[float] = None,
         calibration: str = "california",
         fuel_burn_rate: Optional[float] = None,
+        debug: bool = False,
     ):
         """
         The constructor defines the state and action space, initializes the fires,
@@ -65,14 +66,15 @@ class FireWorld:
 
         # Resolve defaults based on calibration
         if fuel_mean is None:
-            fuel_mean = 8.5 if calibration == "california" else 2.2
+            fuel_mean = 8.5 if calibration == "california" else 3.5
         if fuel_stdev is None:
-            fuel_stdev = 3 if calibration == "california" else 0.9
+            fuel_stdev = 3 if calibration == "california" else 1.3
         if fire_propagation_rate is None:
             fire_propagation_rate = 0.094
         if fuel_burn_rate is None:
-            fuel_burn_rate = 1.0 if calibration == "california" else 1.6
+            fuel_burn_rate = 1.0 if calibration == "california" else 1.0
         self.fuel_burn_rate = fuel_burn_rate
+        self.debug = debug
 
         # Check that populated areas are within the grid
         valid_populated_areas = (
@@ -173,6 +175,7 @@ class FireWorld:
         self.state_space[FUEL_INDEX] = self._initialize_fuel_map(
             num_rows, num_cols, fuel_mean, fuel_stdev
         )
+        self._ensure_burning_cells_have_fuel()
 
         # Initialize populated areas
         pop_rows, pop_cols = populated_areas[:, 0], populated_areas[:, 1]
@@ -227,6 +230,9 @@ class FireWorld:
         # Record which population cells have finished evacuating
         self.finished_evacuating_cells = []
 
+        if self.debug and self.calibration == "saudi":
+            self._log_fuel_stats("init")
+
     def _initialize_fuel_map(
         self, num_rows: int, num_cols: int, fuel_mean: float, fuel_stdev: float
     ) -> np.ndarray:
@@ -235,29 +241,85 @@ class FireWorld:
 
         if self.calibration == "saudi":
             cluster_map = self._build_oasis_clusters(num_rows, num_cols)
-            base_fuel = base_fuel * 0.35 + cluster_map
+            sparsity = np.random.random((num_rows, num_cols))
+            background_scale = np.where(sparsity > 0.5, 0.8, 0.35)
+            background = base_fuel * background_scale
+            base_fuel = background + cluster_map
 
         return np.clip(base_fuel, 0, None)
 
+    def _ensure_burning_cells_have_fuel(self) -> None:
+        burning_cells = np.where(self.state_space[FIRE_INDEX] == 1)
+        if burning_cells[0].size == 0:
+            return
+
+        min_fuel = max(1.0, self.fuel_burn_rate * 1.5)
+        current_fuel = self.state_space[FUEL_INDEX, burning_cells[0], burning_cells[1]]
+        self.state_space[FUEL_INDEX, burning_cells[0], burning_cells[1]] = np.maximum(
+            current_fuel, min_fuel
+        )
+
     def _build_oasis_clusters(self, num_rows: int, num_cols: int) -> np.ndarray:
-        rng = np.random.default_rng()
-        cluster_count = max(3, int(min(num_rows, num_cols) / 3))
-        cluster_radius = max(2.0, min(num_rows, num_cols) * 0.12)
-        cluster_peak = 6.0
+        cluster_count = max(4, int(min(num_rows, num_cols) / 2.8))
+        cluster_radius = max(2.0, min(num_rows, num_cols) * 0.1)
+        cluster_peak = 8.0
 
         rows = np.arange(num_rows)[:, None]
         cols = np.arange(num_cols)[None, :]
         cluster_map = np.zeros((num_rows, num_cols), dtype=float)
 
         for _ in range(cluster_count):
-            center_row = rng.integers(0, num_rows)
-            center_col = rng.integers(0, num_cols)
+            center_row = np.random.randint(0, num_rows)
+            center_col = np.random.randint(0, num_cols)
             dist2 = (rows - center_row) ** 2 + (cols - center_col) ** 2
             cluster_map += cluster_peak * np.exp(
                 -dist2 / (2 * (cluster_radius**2))
             )
 
         return cluster_map
+
+    def _log_fuel_stats(self, stage: str) -> None:
+        fuel = self.state_space[FUEL_INDEX]
+        print(
+            "[Saudi debug] stage="
+            + stage
+            + " fuel_min="
+            + f"{fuel.min():.3f}"
+            + " fuel_mean="
+            + f"{fuel.mean():.3f}"
+            + " fuel_max="
+            + f"{fuel.max():.3f}"
+        )
+
+    def _log_spread_stats(
+        self, step: int, spread: torch.Tensor, burning_before: int, burning_after: int
+    ) -> None:
+        if step % 5 != 0:
+            return
+
+        spread_min = float(spread.min().item())
+        spread_mean = float(spread.mean().item())
+        spread_max = float(spread.max().item())
+        wind_speed = self.wind_speed if self.wind_speed is not None else 0.0
+        wind_angle = self.wind_angle if self.wind_angle is not None else 0.0
+        print(
+            "[Saudi debug] step="
+            + str(step)
+            + " burning="
+            + str(burning_before)
+            + "->"
+            + str(burning_after)
+            + " spread_min="
+            + f"{spread_min:.4f}"
+            + " spread_mean="
+            + f"{spread_mean:.4f}"
+            + " spread_max="
+            + f"{spread_max:.4f}"
+            + " wind_speed="
+            + f"{wind_speed:.2f}"
+            + " wind_angle="
+            + f"{wind_angle:.3f}"
+        )
 
     @staticmethod
     def dune_profile(
@@ -323,6 +385,7 @@ class FireWorld:
         """
         Sample the next state of the wildfire model.
         """
+        burning_before = int(self.state_space[FIRE_INDEX].sum())
         if self.wind_model == "shamal":
             self._update_shamal_wind_mask()
 
@@ -331,6 +394,9 @@ class FireWorld:
             self.fuel_burn_rate
         )
         self.state_space[FUEL_INDEX, self.state_space[FUEL_INDEX] < 0] = 0
+
+        if self.debug and self.calibration == "saudi":
+            self._log_fuel_stats("step=" + str(self.time_step) + "_postburn")
 
         # Extinguishes cells that have run out of fuel
         self.state_space[FIRE_INDEX, self.state_space[FUEL_INDEX, :] <= 0] = 0
@@ -361,6 +427,12 @@ class FireWorld:
         self.state_space[FIRE_INDEX] = np.maximum(
             np.array(new_fire), self.state_space[FIRE_INDEX]
         )
+
+        if self.debug and self.calibration == "saudi":
+            burning_after = int(self.state_space[FIRE_INDEX].sum())
+            self._log_spread_stats(
+                self.time_step, z, burning_before, burning_after
+            )
 
     def update_paths_and_evactuations(self):
         """
