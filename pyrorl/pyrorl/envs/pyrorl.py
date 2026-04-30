@@ -46,6 +46,7 @@ class WildfireEvacuationEnv(gym.Env):
         visibility_radius: Optional[int] = None,
         dust_intensity: Optional[float] = None,
         visibility_center: Optional[Tuple[int, int]] = None,
+        debug: bool = False,
         skip: bool = False,
     ):
         """
@@ -64,13 +65,13 @@ class WildfireEvacuationEnv(gym.Env):
         self.wind_angle = wind_angle
         self.calibration = calibration
         if fuel_mean is None:
-            fuel_mean = 8.5 if calibration == "california" else 2.2
+            fuel_mean = 8.5 if calibration == "california" else 3.5
         if fuel_stdev is None:
-            fuel_stdev = 3 if calibration == "california" else 0.9
+            fuel_stdev = 3 if calibration == "california" else 1.3
         if fire_propagation_rate is None:
             fire_propagation_rate = 0.094
         if fuel_burn_rate is None:
-            fuel_burn_rate = 1.0 if calibration == "california" else 1.6
+            fuel_burn_rate = 1.0 if calibration == "california" else 1.0
         if dust_intensity is None:
             dust_intensity = 0.0 if calibration == "california" else 0.45
         if visibility_radius is None and calibration == "saudi":
@@ -83,6 +84,7 @@ class WildfireEvacuationEnv(gym.Env):
         self.visibility_radius = visibility_radius
         self.dust_intensity = dust_intensity
         self.visibility_center = visibility_center
+        self.debug = debug
         self.skip = skip
         self.fire_env = FireWorld(
             num_rows,
@@ -98,6 +100,7 @@ class WildfireEvacuationEnv(gym.Env):
             fire_propagation_rate=fire_propagation_rate,
             calibration=calibration,
             fuel_burn_rate=fuel_burn_rate,
+            debug=debug,
         )
 
         # Set up action space
@@ -133,6 +136,7 @@ class WildfireEvacuationEnv(gym.Env):
             fire_propagation_rate=self.fire_propagation_rate,
             calibration=self.calibration,
             fuel_burn_rate=self.fuel_burn_rate,
+            debug=self.debug,
         )
 
         state_space = self._apply_visibility(self.fire_env.get_state())
