@@ -27,7 +27,7 @@ from typing import TYPE_CHECKING
 import numpy as np
 
 if TYPE_CHECKING:
-    from pyrorl.envs.pyrorl import WildfireEvacuationEnv
+    from ..pyrorl import WildfireEvacuationEnv
 
 # Indices matching environment.py
 FIRE_INDEX = 0
@@ -57,7 +57,7 @@ def _apply_high_wind(env: "WildfireEvacuationEnv") -> None:
         fire_env.wind_model = "static"
 
     # Re-apply wind transform with boosted speed
-    from pyrorl.envs.environment.environment_constant import linear_wind_transform
+    from .environment_constant import linear_wind_transform
     import torch
     fire_env.fire_mask = torch.as_tensor(
         linear_wind_transform(fire_env.wind_speed, fire_env.wind_angle)
