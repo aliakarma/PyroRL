@@ -1,6 +1,21 @@
-scenario,failure_type,explanation,mean_reward,std_reward,mean_fire_cells,mean_new_ignitions,mean_action_entropy,mean_suppression_success_rate
-high_wind,environment sensitivity,high variance in outcomes,-97.81,76.64,4.61,76.10,0.0756,0.1082
-low_fuel,none,policy succeeds,-13.92,17.97,0.71,18.13,0.0019,0.0544
-oasis_cluster,underestimates spread,fire grows rapidly,-263.07,159.50,12.39,169.73,0.0787,0.2098
-multi_ignition,environment sensitivity,high variance in outcomes,-128.90,56.61,6.08,112.83,0.0974,0.1637
-narrow_corridor,none,policy succeeds,-7.23,19.02,0.41,10.77,0.0226,0.0391
+scenario,model,failure_type,severity,notes
+high_wind,CA,over-spread,high,Policy failed to reduce fire significantly (burned 26 vs baseline 29)
+high_wind,SA,over-suppression,medium,High suppression (100 actions) with low efficiency (0.07)
+low_fuel,CA,none,low,"Policy succeeded (burned 6, suppression 100)"
+low_fuel,SA,none (aggressive),low,"Aggressive but effective suppression (100 actions, 3 burned)"
+oasis_cluster,CA,over-spread,high,Policy failed to reduce fire significantly (burned 100 vs baseline 99)
+oasis_cluster,SA,partial containment,medium,Moderate fire reduction but still significant burn area (64)
+multi_ignition,CA,over-spread,high,Policy failed to reduce fire significantly (burned 90 vs baseline 94)
+multi_ignition,SA,none,low,"Policy succeeded (burned 43, suppression 100)"
+narrow_corridor,CA,none,low,"Policy succeeded (burned 8, suppression 100)"
+narrow_corridor,SA,none (aggressive),low,"Aggressive but effective suppression (100 actions, 3 burned)"
+extreme_wind,CA,over-spread,high,Policy failed to reduce fire significantly (burned 36 vs baseline 40)
+extreme_wind,SA,over-spread,high,Policy failed to reduce fire significantly (burned 56 vs baseline 40)
+fuel_depletion,CA,over-spread,high,Policy failed to reduce fire significantly (burned 3 vs baseline 4)
+fuel_depletion,SA,over-suppression,medium,High suppression (100 actions) with low efficiency (0.01)
+random_terrain,CA,partial containment,medium,Moderate fire reduction but still significant burn area (60)
+random_terrain,SA,none (aggressive),low,"Aggressive but effective suppression (100 actions, 2 burned)"
+delayed_ignition,CA,over-spread,high,Policy failed to reduce fire significantly (burned 92 vs baseline 96)
+delayed_ignition,SA,none (aggressive),low,"Aggressive but effective suppression (100 actions, 14 burned)"
+dense_population,CA,over-spread,high,Policy failed to reduce fire significantly (burned 91 vs baseline 88)
+dense_population,SA,none (aggressive),low,"Aggressive but effective suppression (100 actions, 15 burned)"

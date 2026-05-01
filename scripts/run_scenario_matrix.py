@@ -36,6 +36,7 @@ if str(repo_root) not in sys.path:
     sys.path.insert(0, str(repo_root))
 
 from pyrorl.pyrorl.envs.pyrorl import PyroRLEnv
+from pyrorl.pyrorl.envs.environment.environment import FIRE_INDEX, FUEL_INDEX
 
 # ---------------------------------------------------------------------------
 # Scenario list
@@ -135,9 +136,12 @@ def evaluate_silent(
     """Run evaluation episodes and return a statistics dict.
 
     Returns:
-        dict with keys: mean, std, ci95, min, max, median, rewards
+        dict with keys: mean, std, ci95, min, max, median, rewards,
+                        suppression_actions, burned_cells
     """
     all_rewards: list[float] = []
+    all_suppression: list[int] = []
+    all_burned: list[int] = []
 
     for ep in range(episodes):
         set_seeds(seed + ep)
@@ -145,15 +149,29 @@ def evaluate_silent(
         obs, _ = env.reset(seed=seed + ep)
         done = False
         total_reward = 0.0
+        ep_suppression = 0
+
+        # The last action index is the "do nothing" action
+        noop_action = env.action_space.n - 1
 
         while not done:
             action, _ = model.predict(obs, deterministic=True)
             action_value = int(np.asarray(action).item())
+            if action_value != noop_action:
+                ep_suppression += 1
             obs, reward, terminated, truncated, _ = env.step(action_value)
             done = terminated or truncated
             total_reward += float(reward)
 
+        # Count burned cells: cells where fuel is depleted and fire is off
+        state = env.fire_env.get_state()
+        burned = int((state[FIRE_INDEX] == 1).sum())
+        # Also count cells that had fire at some point (fuel <= 0)
+        burned += int(np.logical_and(state[FUEL_INDEX] <= 0, state[FIRE_INDEX] == 0).sum())
+
         all_rewards.append(total_reward)
+        all_suppression.append(ep_suppression)
+        all_burned.append(burned)
         env.close()
 
     rewards = np.array(all_rewards)
@@ -170,7 +188,76 @@ def evaluate_silent(
         "max": float(np.max(rewards)),
         "median": float(np.median(rewards)),
         "rewards": all_rewards,
+        "suppression_actions": float(np.mean(all_suppression)),
+        "burned_cells": float(np.mean(all_burned)),
     }
+
+
+def evaluate_baseline_noop(
+    calibration: str,
+    scenario: str | None,
+    episodes: int,
+    seed: int,
+) -> float:
+    """Run episodes with the no-op (do-nothing) policy to establish a baseline.
+
+    Returns:
+        Mean burned cells across episodes.
+    """
+    all_burned: list[int] = []
+
+    for ep in range(episodes):
+        set_seeds(seed + ep)
+        env = create_eval_environment(calibration=calibration, scenario=scenario)
+        obs, _ = env.reset(seed=seed + ep)
+        done = False
+        noop_action = env.action_space.n - 1
+
+        while not done:
+            obs, reward, terminated, truncated, _ = env.step(noop_action)
+            done = terminated or truncated
+
+        state = env.fire_env.get_state()
+        burned = int((state[FIRE_INDEX] == 1).sum())
+        burned += int(np.logical_and(state[FUEL_INDEX] <= 0, state[FIRE_INDEX] == 0).sum())
+        all_burned.append(burned)
+        env.close()
+
+    return float(np.mean(all_burned))
+
+
+def classify_failure(ca_stats: dict, sa_stats: dict, baseline_burned: float) -> list[dict]:
+    """Heuristically classify failure modes for both models."""
+    rows = []
+    for label, stats in [("CA", ca_stats), ("SA", sa_stats)]:
+        supp = stats["suppression_actions"]
+        burned = stats["burned_cells"]
+        reduction = baseline_burned - burned
+        efficiency = reduction / max(1, supp)
+
+        if burned > baseline_burned * 0.8:
+            ftype, severity = "over-spread", "high"
+            notes = f"Policy failed to reduce fire significantly (burned {burned:.0f} vs baseline {baseline_burned:.0f})"
+        elif supp > 80 and efficiency < 0.1:
+            ftype, severity = "over-suppression", "medium"
+            notes = f"High suppression ({supp:.0f} actions) with low efficiency ({efficiency:.2f})"
+        elif burned > baseline_burned * 0.5:
+            ftype, severity = "partial containment", "medium"
+            notes = f"Moderate fire reduction but still significant burn area ({burned:.0f})"
+        elif supp > 60 and burned < baseline_burned * 0.3:
+            ftype, severity = "none (aggressive)", "low"
+            notes = f"Aggressive but effective suppression ({supp:.0f} actions, {burned:.0f} burned)"
+        else:
+            ftype, severity = "none", "low"
+            notes = f"Policy succeeded (burned {burned:.0f}, suppression {supp:.0f})"
+
+        rows.append({
+            "model": label,
+            "failure_type": ftype,
+            "severity": severity,
+            "notes": notes,
+        })
+    return rows
 
 
 # ---------------------------------------------------------------------------
@@ -222,6 +309,7 @@ def run_matrix(
 
     # Evaluate all scenarios
     results: list[dict] = []
+    all_failures: list[dict] = []
 
     total_cells = len(SCENARIOS) * 2
     cell_idx = 0
@@ -243,9 +331,31 @@ def run_matrix(
             row[f"{cal_label.lower()}_min"] = stats["min"]
             row[f"{cal_label.lower()}_max"] = stats["max"]
             row[f"{cal_label.lower()}_rewards"] = stats["rewards"]
+            row[f"{cal_label.lower()}_suppression"] = stats["suppression_actions"]
+            row[f"{cal_label.lower()}_burned"] = stats["burned_cells"]
             print(f"mean={stats['mean']:8.2f} ± {stats['ci95']:.2f}")
 
+        # Run baseline (no-op) for this scenario
+        baseline_burned = evaluate_baseline_noop("california", scenario, min(episodes, 10), seed)
+        row["baseline_burned"] = baseline_burned
+
+        # Compute suppression efficiency for each model
+        for prefix in ["ca", "sa"]:
+            burned = row[f"{prefix}_burned"]
+            supp = row[f"{prefix}_suppression"]
+            reduction = baseline_burned - burned
+            row[f"{prefix}_efficiency"] = reduction / max(1.0, supp)
+
         row["drop"] = row["sa_mean"] - row["ca_mean"]
+
+        # Classify failure modes
+        ca_stats_row = {"suppression_actions": row["ca_suppression"], "burned_cells": row["ca_burned"]}
+        sa_stats_row = {"suppression_actions": row["sa_suppression"], "burned_cells": row["sa_burned"]}
+        failures = classify_failure(ca_stats_row, sa_stats_row, baseline_burned)
+        for f in failures:
+            f["scenario"] = scenario
+        all_failures.extend(failures)
+
         results.append(row)
 
     # -----------------------------------------------------------------------
@@ -312,6 +422,8 @@ def run_matrix(
             "ca_mean", "ca_std", "ca_ci95", "ca_min", "ca_max",
             "sa_mean", "sa_std", "sa_ci95", "sa_min", "sa_max",
             "drop",
+            "ca_suppression", "ca_burned", "sa_suppression", "sa_burned",
+            "baseline_burned", "ca_efficiency", "sa_efficiency",
         ])
         for row in results:
             writer.writerow([
@@ -321,6 +433,10 @@ def run_matrix(
                 f"{row['sa_mean']:.4f}", f"{row['sa_std']:.4f}", f"{row['sa_ci95']:.4f}",
                 f"{row['sa_min']:.4f}", f"{row['sa_max']:.4f}",
                 f"{row['drop']:.4f}",
+                f"{row['ca_suppression']:.1f}", f"{row['ca_burned']:.1f}",
+                f"{row['sa_suppression']:.1f}", f"{row['sa_burned']:.1f}",
+                f"{row['baseline_burned']:.1f}",
+                f"{row['ca_efficiency']:.4f}", f"{row['sa_efficiency']:.4f}",
             ])
 
     print(f"Results saved to: {csv_path}")
@@ -336,7 +452,17 @@ def run_matrix(
             for i, r in enumerate(row["sa_rewards"]):
                 writer.writerow([row["scenario"], "SA", i + 1, f"{r:.4f}"])
 
-    print(f"Detail saved to:  {detail_csv_path}\n")
+    print(f"Detail saved to:  {detail_csv_path}")
+
+    # Save failure mode report
+    failure_csv_path = os.path.join(log_dir, "failure_modes.csv")
+    with open(failure_csv_path, "w", newline="", encoding="utf-8") as f:
+        writer = csv.writer(f)
+        writer.writerow(["scenario", "model", "failure_type", "severity", "notes"])
+        for fm in all_failures:
+            writer.writerow([fm["scenario"], fm["model"], fm["failure_type"], fm["severity"], fm["notes"]])
+
+    print(f"Failure modes saved to: {failure_csv_path}\n")
 
     return results
 

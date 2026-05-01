@@ -604,11 +604,20 @@ class FireWorld:
         )
         fire_delta = self.prev_fire_cells - current_fire_cells
         w = self.reward_weights
+        
+        # Check if the last action was a suppression action (i.e. not the no-op action)
+        is_suppression_action = False
+        if hasattr(self, 'current_action') and self.current_action != self.actions[-1]:
+            is_suppression_action = True
+            
+        suppression_penalty = w.get("suppression_penalty", 0.0) if is_suppression_action else 0.0
+
         # Reward signal: dense, smooth, and action-correlated (via suppression affecting spread).
         # - Positive for reducing burning cells (fire_delta)
         # - Shaping term: negative proportional to current burning cells
         # - Penalty for newly ignited cells (spread pressure)
         # - Smaller population penalties (still important, but not allowed to swamp learning early)
+        # - Optional suppression penalty to reduce over-suppression
         self.reward = (
             w["fire_delta"] * float(fire_delta)
             - w["burning_cells"] * float(current_fire_cells)
@@ -616,6 +625,7 @@ class FireWorld:
             - w["newly_burned_population"] * float(len(enflamed_populated_areas))
             - w["burning_population"] * float(burning_population)
             + w["finished_evac"] * float(self.last_finished_evac_count)
+            - suppression_penalty
         )
         self.prev_fire_cells = current_fire_cells
         self.last_reward_components = {
@@ -643,6 +653,7 @@ class FireWorld:
         """
         Allow the agent to take an action within the action space.
         """
+        self.current_action = action
         # Check that there is an action to take
         if (
             action in self.action_to_pop_and_path

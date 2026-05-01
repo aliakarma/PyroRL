@@ -147,6 +147,7 @@ def create_default_environment(calibration: str = "california"):
             "newly_burned_population": 0.0,
             "burning_population": 0.0,
             "finished_evac": 0.0,
+            "suppression_penalty": float(os.environ.get("PYRORL_SUPPRESSION_PENALTY", 0.0)),
         },
     }
     if calibration == "saudi":
@@ -385,11 +386,20 @@ def main():
         "--eval_freq",
         type=int,
         default=10000,
-        help="Evaluation frequency",
+        help="Evaluation frequency in timesteps (default: 10000)",
     )
-    
+    parser.add_argument(
+        "--suppression_penalty",
+        type=float,
+        default=0.0,
+        help="Penalty per suppression action (default: 0.0)",
+    )
+
     args = parser.parse_args()
-    
+
+    if args.suppression_penalty > 0.0:
+        os.environ["PYRORL_SUPPRESSION_PENALTY"] = str(args.suppression_penalty)
+
     train_ppo(
         calibration=args.calibration,
         timesteps=args.timesteps,
