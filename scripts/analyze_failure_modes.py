@@ -196,6 +196,7 @@ def main():
     parser.add_argument("--calibration", type=str, default="saudi", choices=["california", "saudi"])
     parser.add_argument("--episodes", type=int, default=30, help="Episodes per scenario")
     parser.add_argument("--seed", type=int, default=42, help="Random seed")
+    parser.add_argument("--output_dir", type=str, default="logs", help="Base output directory")
     
     args = parser.parse_args()
 
@@ -243,9 +244,9 @@ def main():
     print("-" * 75)
 
     # Save CSV
-    log_dir = "logs"
-    os.makedirs(log_dir, exist_ok=True)
-    csv_path = os.path.join(log_dir, "failure_modes.csv")
+    log_dir = Path(args.output_dir)
+    log_dir.mkdir(parents=True, exist_ok=True)
+    csv_path = log_dir / "failure_modes.csv"
 
     with open(csv_path, "w", newline="", encoding="utf-8") as f:
         writer = csv.writer(f)

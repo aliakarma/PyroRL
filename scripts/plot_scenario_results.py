@@ -4,11 +4,20 @@ import matplotlib.pyplot as plt
 import numpy as np
 import os
 
+import argparse
+
 def main():
-    csv_path = "logs/scenario_matrix.csv"
-    if not os.path.exists(csv_path):
-        print(f"Error: {csv_path} not found. Please run run_scenario_matrix.py first.")
-        return
+    parser = argparse.ArgumentParser(description="Plot PyroRL scenario evaluation results")
+    parser.add_argument("--output_dir", type=str, default="logs", help="Directory containing scenario_matrix.csv")
+    args = parser.parse_args()
+
+    print(f"[INFO] Output directory: {args.output_dir}")
+
+    from pathlib import Path
+    out_dir = Path(args.output_dir)
+    csv_path = out_dir / "scenario_matrix.csv"
+    
+    assert csv_path.exists(), f"Error: {csv_path} not found. Please run run_scenario_matrix.py first."
 
     df = pd.read_csv(csv_path)
     
@@ -35,11 +44,12 @@ def main():
     
     ax.grid(axis='y', linestyle='--', alpha=0.7)
     
+    fig_dir = out_dir / "figures"
+    fig_dir.mkdir(parents=True, exist_ok=True)
+    out_path = fig_dir / "fig_scenario_comparison.png"
     plt.tight_layout()
-    os.makedirs("logs", exist_ok=True)
-    out_path = "logs/fig_scenario_comparison.png"
     plt.savefig(out_path, dpi=300, bbox_inches='tight')
-    print(f"Saved plot to {out_path}")
+    print(f"[SAVE] {out_path}")
 
 if __name__ == "__main__":
     main()

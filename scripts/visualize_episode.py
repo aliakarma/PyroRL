@@ -20,6 +20,8 @@ import shutil
 import sys
 from pathlib import Path
 
+import random
+import torch
 import numpy as np
 import matplotlib
 matplotlib.use("Agg")
@@ -65,6 +67,14 @@ CAPTION_TEMPLATES = {
     "delayed_ignition": "With a 15-step ignition delay, {ca_desc}. {sa_desc}.",
     "dense_population": "In a densely populated grid requiring active suppression, {ca_desc}. {sa_desc}.",
 }
+
+def set_seeds(seed: int):
+    """Set random seeds for reproducibility."""
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed(seed)
 
 # ---------------------------------------------------------------------------
 # Environment factory
@@ -263,10 +273,11 @@ def render_single(env, step, output_dir, title_str, annotate=False, policy_label
               borderaxespad=0.5, framealpha=0.9)
     plt.tight_layout()
 
-    frame_path = os.path.join(output_dir, f"frame_{step:03d}.png")
+    frame_path = Path(output_dir) / f"frame_{step:03d}.png"
     plt.savefig(frame_path, dpi=100)
     if save_key_frame and key_frame_path:
         plt.savefig(key_frame_path, dpi=200)
+        print(f"[SAVE] {key_frame_path}")
 
     plt.close()
     return frame_path
@@ -295,6 +306,7 @@ def render_compare(env_ca, env_sa, step, output_dir, scenario, annotate=False,
     plt.savefig(frame_path, dpi=100)
     if save_key_frame and key_frame_path:
         plt.savefig(key_frame_path, dpi=200)
+        print(f"[SAVE] {key_frame_path}")
 
     plt.close()
     return frame_path
@@ -332,13 +344,14 @@ def generate_caption(scenario, env_ca, env_sa, out_dir):
     caption_path = Path(out_dir) / "caption.txt"
     with open(caption_path, "w", encoding="utf-8") as f:
         f.write(caption + "\n")
-    print(f"  Caption saved to {caption_path}")
+    print(f"[SAVE] {caption_path}")
 
 # ---------------------------------------------------------------------------
 # Episode runners
 # ---------------------------------------------------------------------------
 
 def run_single(args, temp_dir):
+    set_seeds(args.seed)
     model_name = os.path.basename(args.model).replace(".zip", "")
     title_str = f"Scenario: {args.scenario} | Model: {model_name}"
 
@@ -357,7 +370,7 @@ def run_single(args, temp_dir):
         save_key = step in KEY_FRAMES
         key_frame_path = None
         if save_key:
-            key_frame_path = os.path.join("logs", f"frame_{args.scenario}_{model_name}_t{step}.png")
+            key_frame_path = Path(args.output_dir) / f"frame_{args.scenario}_{model_name}_t{step}.png"
 
         frame_path = render_single(
             env, step, temp_dir, title_str,
@@ -374,12 +387,13 @@ def run_single(args, temp_dir):
         step += 1
 
     print(f"Episode finished in {step} steps. Generating GIF...")
-    out_gif = args.out if args.out else f"logs/fire_{args.scenario}_{model_name}.gif"
+    out_gif = args.out if args.out else Path(args.output_dir) / f"fire_{args.scenario}_{model_name}.gif"
     imageio.mimsave(out_gif, frames, duration=200, loop=0)
-    print(f"Successfully saved visualization GIF to {out_gif}")
+    print(f"[SAVE] {out_gif}")
 
 
 def run_compare(ca_model_path, sa_model_path, scenario, output_dir, temp_dir, annotate=False, seed=42):
+    set_seeds(seed)
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -431,7 +445,7 @@ def run_compare(ca_model_path, sa_model_path, scenario, output_dir, temp_dir, an
     print(f"  Episode finished in {step} steps. Generating GIF...")
     out_gif = output_dir / "compare.gif"
     imageio.mimsave(out_gif, frames, duration=200, loop=0)
-    print(f"  GIF saved to {out_gif}")
+    print(f"[SAVE] {out_gif}")
 
     # Auto-generate caption
     generate_caption(scenario, env_ca, env_sa, output_dir)
@@ -451,18 +465,21 @@ def main():
     parser.add_argument("--scenario", required=True, help="Scenario to apply (required)")
     parser.add_argument("--out", help="Output gif path for single mode")
     parser.add_argument("--seed", type=int, default=42, help="Random seed")
+    parser.add_argument("--output_dir", type=str, default="logs", help="Base output directory")
     args = parser.parse_args()
 
-    os.makedirs("logs", exist_ok=True)
-    temp_dir = "temp_frames"
-    os.makedirs(temp_dir, exist_ok=True)
+    out_path = Path(args.output_dir)
+    out_path.mkdir(parents=True, exist_ok=True)
+    
+    temp_dir = Path("temp_frames")
+    temp_dir.mkdir(parents=True, exist_ok=True)
 
     if args.compare:
         if not args.ca_model or not args.sa_model:
             print("Error: --compare requires --ca_model and --sa_model")
             sys.exit(1)
 
-        output_dir = Path("logs") / args.scenario
+        output_dir = Path(args.output_dir) / args.scenario
         run_compare(
             ca_model_path=args.ca_model,
             sa_model_path=args.sa_model,

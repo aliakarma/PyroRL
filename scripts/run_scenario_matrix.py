@@ -269,8 +269,26 @@ def run_matrix(
     sa_model_path: str,
     episodes: int,
     seed: int,
+    output_dir: str,
 ):
     """Evaluate both models across all scenarios and print a results table."""
+
+    from pathlib import Path
+    import datetime
+
+    out_dir = Path(output_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    print(f"[INFO] Output directory: {out_dir}")
+
+    # Write experiment config
+    config_path = out_dir / "experiment_config.txt"
+    with open(config_path, "w", encoding="utf-8") as f:
+        f.write(f"Experiment Timestamp: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M')}\n")
+        f.write(f"Seed: {seed}\n")
+        f.write(f"CA Model: {ca_model_path}\n")
+        f.write(f"SA Model: {sa_model_path}\n")
+        f.write(f"Episodes: {episodes}\n")
+        f.write(f"Scenarios: {SCENARIOS}\n")
 
     # Validate model files
     for label, path in [("CA", ca_model_path), ("SA", sa_model_path)]:
@@ -411,9 +429,7 @@ def run_matrix(
     # -----------------------------------------------------------------------
     # Save CSV
     # -----------------------------------------------------------------------
-    log_dir = "logs"
-    os.makedirs(log_dir, exist_ok=True)
-    csv_path = os.path.join(log_dir, "scenario_matrix.csv")
+    csv_path = out_dir / "scenario_matrix.csv"
 
     with open(csv_path, "w", newline="", encoding="utf-8") as f:
         writer = csv.writer(f)
@@ -442,7 +458,7 @@ def run_matrix(
     print(f"Results saved to: {csv_path}")
 
     # Save per-episode detail CSV
-    detail_csv_path = os.path.join(log_dir, "scenario_matrix_detail.csv")
+    detail_csv_path = out_dir / "scenario_matrix_detail.csv"
     with open(detail_csv_path, "w", newline="", encoding="utf-8") as f:
         writer = csv.writer(f)
         writer.writerow(["scenario", "model", "episode_id", "reward"])
@@ -455,7 +471,7 @@ def run_matrix(
     print(f"Detail saved to:  {detail_csv_path}")
 
     # Save failure mode report
-    failure_csv_path = os.path.join(log_dir, "failure_modes.csv")
+    failure_csv_path = out_dir / "failure_modes.csv"
     with open(failure_csv_path, "w", newline="", encoding="utf-8") as f:
         writer = csv.writer(f)
         writer.writerow(["scenario", "model", "failure_type", "severity", "notes"])
@@ -499,7 +515,12 @@ def main():
         default=42,
         help="Random seed (default: 42)",
     )
-
+    parser.add_argument(
+        "--output_dir",
+        type=str,
+        default="logs",
+        help="Output directory for matrix results",
+    )
     args = parser.parse_args()
 
     run_matrix(
@@ -507,6 +528,7 @@ def main():
         sa_model_path=args.sa_model,
         episodes=args.episodes,
         seed=args.seed,
+        output_dir=args.output_dir,
     )
 
 

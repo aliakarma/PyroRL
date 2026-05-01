@@ -118,6 +118,7 @@ def run_evaluation(
     episodes: int,
     seed: int,
     save_csv: bool,
+    output_dir: str = "logs",
 ):
     """Load a trained PPO model and evaluate it over multiple episodes."""
 
@@ -217,10 +218,10 @@ def run_evaluation(
     # Optionally save CSV
     # -----------------------------------------------------------------------
     if save_csv:
-        log_dir = os.path.join("logs")
-        os.makedirs(log_dir, exist_ok=True)
+        log_dir = Path(output_dir)
+        log_dir.mkdir(parents=True, exist_ok=True)
         csv_filename = f"eval_{calibration}_{scenario_label}.csv"
-        csv_path = os.path.join(log_dir, csv_filename)
+        csv_path = log_dir / csv_filename
 
         with open(csv_path, "w", newline="", encoding="utf-8") as f:
             writer = csv.writer(f)
@@ -284,6 +285,12 @@ def main():
         action="store_true",
         help="Disable CSV saving",
     )
+    parser.add_argument(
+        "--output_dir",
+        type=str,
+        default="logs",
+        help="Base output directory",
+    )
 
     args = parser.parse_args()
     save_csv = args.save_csv and not args.no_csv
@@ -295,6 +302,7 @@ def main():
         episodes=args.episodes,
         seed=args.seed,
         save_csv=save_csv,
+        output_dir=args.output_dir,
     )
 
 

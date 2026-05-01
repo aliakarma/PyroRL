@@ -166,10 +166,53 @@ You can add the `--annotate` flag to any visualizer command to produce annotated
 ### 6. Automated Generation
 To fully automate the generation of comparative figures, captions, and snapshots across **every scenario**, use the dedicated generator script:
 ```bash
-python scripts/generate_all_visualizations.py --ca_model checkpoints/ppo_california_best.zip --sa_model checkpoints/ppo_saudi_best.zip
+python scripts/generate_all_visualizations.py --ca_model checkpoints/ppo_california_best.zip --sa_model checkpoints/ppo_saudi_best.zip --annotate --seed 42
 ```
 **What it does**:
-This iterates over all 10 registered scenarios, creating a dedicated subdirectory for each inside `logs/` (e.g., `logs/extreme_wind/`). Inside each folder, it will output the full suite of comparison assets and a `caption.txt` with an auto-generated, academic interpretation of the policy behaviors.
+This iterates over all 10 registered scenarios, creating a dedicated subdirectory for each inside `logs/scenarios/` (e.g., `logs/scenarios/extreme_wind/`). Inside each folder, it will output the full suite of comparison assets and a `caption.txt` with an auto-generated, academic interpretation of the policy behaviors.
+
+## Reproducibility
+
+All results can be reproduced with:
+```bat
+scripts\run_all.bat
+```
+
+Each run creates a new experiment folder:
+`logs/exp_<timestamp>/`
+
+## Experiment Tracking
+
+Each experiment logs:
+* configuration (`experiment_config.txt`)
+* evaluation results (CSV)
+* figures
+* scenario visualizations
+
+## Output Structure
+
+The codebase is organized to output perfectly structured, publication-ready assets into the experiment directory:
+
+```text
+logs/exp_<timestamp>/
+├── experiment_config.txt       # Experiment configuration parameters
+├── scenario_matrix.csv         # Full evaluation results
+├── scenario_matrix_detail.csv  # Episode-level reward tracking
+├── failure_modes.csv           # Auto-generated heuristic report
+├── figures/
+│   └── fig_scenario_comparison.png  # Performance comparison bar chart
+└── scenarios/
+    ├── extreme_wind/           # Per-scenario outputs
+    │   ├── compare.gif         # Side-by-side animated comparison
+    │   ├── compare_t1.png      # Keyframe at t=1
+    │   ├── compare_t20.png     # Keyframe at t=20
+    │   ├── compare_t50.png     # Keyframe at t=50
+    │   ├── compare_t100.png    # Keyframe at t=100
+    │   └── caption.txt         # Auto-generated academic caption
+    ├── high_wind/
+    ├── low_fuel/
+    └── ... (all 10 scenarios)
+```
 
 ## How to Contribute
 

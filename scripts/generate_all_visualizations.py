@@ -47,6 +47,9 @@ def main():
     parser.add_argument(
         "--seed", type=int, default=42, help="Random seed (default: 42)",
     )
+    parser.add_argument(
+        "--output_dir", type=str, default="logs", help="Base output directory for the experiment",
+    )
     args = parser.parse_args()
 
     temp_dir = Path("temp_frames")
@@ -59,21 +62,27 @@ def main():
     print(f"  SA model:  {args.sa_model}")
     print(f"  Annotate:  {args.annotate}")
     print(f"  Seed:      {args.seed}")
+    print(f"  Output:    {args.output_dir}")
     print(f"  Scenarios: {len(SCENARIOS)}")
     print("=" * 70)
+
+    print(f"[INFO] Output directory: {args.output_dir}")
+
+    # Fail-Fast Validation
+    assert (Path(args.output_dir) / "scenario_matrix.csv").exists(), "scenario_matrix.csv must exist before running visualization!"
 
     t0 = time.time()
     for i, scenario in enumerate(SCENARIOS, 1):
         print(f"\n[{i}/{len(SCENARIOS)}] Processing {scenario}...")
         
-        output_dir = Path("logs") / scenario
-        output_dir.mkdir(parents=True, exist_ok=True)
+        scenario_dir = Path(args.output_dir) / "scenarios" / scenario
+        scenario_dir.mkdir(parents=True, exist_ok=True)
         
         run_compare(
             ca_model_path=args.ca_model,
             sa_model_path=args.sa_model,
             scenario=scenario,
-            output_dir=output_dir,
+            output_dir=scenario_dir,
             temp_dir=temp_dir,
             annotate=args.annotate,
             seed=args.seed
@@ -82,7 +91,7 @@ def main():
     elapsed = time.time() - t0
     print(f"\n{'=' * 70}")
     print(f"  COMPLETE — {len(SCENARIOS)} scenarios processed in {elapsed:.1f}s")
-    print(f"  Output directory: logs/")
+    print(f"  Output directory: {Path(args.output_dir) / 'scenarios'}/")
     print(f"{'=' * 70}")
 
     shutil.rmtree(temp_dir, ignore_errors=True)
