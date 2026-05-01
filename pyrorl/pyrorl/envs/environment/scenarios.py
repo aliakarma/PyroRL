@@ -32,6 +32,7 @@ if TYPE_CHECKING:
 # Indices matching environment.py
 FIRE_INDEX = 0
 FUEL_INDEX = 1
+POPULATED_INDEX = 2
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -170,6 +171,105 @@ def _apply_narrow_corridor(env: "WildfireEvacuationEnv") -> None:
     fire_env._ensure_burning_cells_have_fuel()
 
 
+def _apply_extreme_wind(env: "WildfireEvacuationEnv") -> None:
+    """Extreme wind with random gust spikes.
+    
+    Sets wind speed very high (40-50) and creates rapid directional spread.
+    """
+    fire_env = env.fire_env
+    fire_env.wind_model = "shamal"
+    
+    # Patch the _sample_shamal_wind method to have extreme values
+    def custom_shamal_wind(self) -> tuple[float, float]:
+        base_speed = 45.0
+        speed = max(0.0, np.random.normal(base_speed, 8.0))
+        angle = np.deg2rad(135.0) + np.random.normal(0.0, np.deg2rad(10.0))
+
+        # 50% chance of extreme gust
+        if np.random.random() < 0.50:
+            speed += np.random.uniform(15.0, 30.0)
+            angle += np.random.normal(0.0, np.deg2rad(20.0))
+
+        return speed, angle
+
+    import types
+    fire_env._sample_shamal_wind = types.MethodType(custom_shamal_wind, fire_env)
+    fire_env._update_shamal_wind_mask()
+    env.wind_speed = fire_env.wind_speed
+    env.wind_angle = fire_env.wind_angle
+
+
+def _apply_fuel_depletion(env: "WildfireEvacuationEnv") -> None:
+    """Fuel decays faster over time, initial fuel moderate.
+    
+    Fire starts but dies unpredictably.
+    """
+    fire_env = env.fire_env
+    fire_env.state_space[FUEL_INDEX] = np.clip(
+        fire_env.state_space[FUEL_INDEX], 0.0, 6.0
+    )
+    fire_env.fuel_burn_rate = 3.0 # much faster decay
+    fire_env._ensure_burning_cells_have_fuel()
+
+
+def _apply_random_terrain(env: "WildfireEvacuationEnv") -> None:
+    """Add irregular elevation noise, breaking smooth terrain assumptions.
+    
+    Produces unpredictable fire channels.
+    """
+    fire_env = env.fire_env
+    num_rows, num_cols = fire_env.state_space.shape[1], fire_env.state_space.shape[2]
+    
+    noise = np.random.uniform(0.0, 1.0, (num_rows, num_cols))
+    
+    import torch
+    factor = 0.5 + noise
+    fire_env.terrain_spread_factor = torch.from_numpy(factor.astype(np.float32))
+
+
+def _apply_delayed_ignition(env: "WildfireEvacuationEnv") -> None:
+    """No fire for first 15 steps, then ignition starts suddenly."""
+    fire_env = env.fire_env
+    
+    # Store the intended fires, then clear them
+    intended_fires = fire_env.state_space[FIRE_INDEX].copy()
+    fire_env.state_space[FIRE_INDEX] = 0
+    fire_env.prev_fire_cells = 0
+    
+    original_sample = fire_env.sample_fire_propogation
+    
+    def delayed_sample(self):
+        if self.time_step == 15:
+            self.state_space[FIRE_INDEX] = np.maximum(self.state_space[FIRE_INDEX], intended_fires)
+            self._ensure_burning_cells_have_fuel()
+            
+        original_sample()
+        
+    import types
+    fire_env.sample_fire_propogation = types.MethodType(delayed_sample, fire_env)
+
+
+def _apply_dense_population(env: "WildfireEvacuationEnv") -> None:
+    """Increase number of populated cells significantly.
+    
+    Forces policy trade-offs by spreading population across the grid.
+    These extra populations cannot be evacuated and must be protected
+    via fire suppression.
+    """
+    fire_env = env.fire_env
+    num_rows, num_cols = fire_env.state_space.shape[1], fire_env.state_space.shape[2]
+    
+    added = 0
+    attempts = 0
+    while added < 6 and attempts < 100:
+        r = np.random.randint(0, num_rows)
+        c = np.random.randint(0, num_cols)
+        if fire_env.state_space[POPULATED_INDEX, r, c] == 0 and fire_env.state_space[FIRE_INDEX, r, c] == 0:
+            fire_env.state_space[POPULATED_INDEX, r, c] = 1
+            added += 1
+        attempts += 1
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Scenario registry and public API
 # ─────────────────────────────────────────────────────────────────────────────
@@ -180,6 +280,11 @@ _SCENARIO_REGISTRY = {
     "oasis_cluster": _apply_oasis_cluster,
     "multi_ignition": _apply_multi_ignition,
     "narrow_corridor": _apply_narrow_corridor,
+    "extreme_wind": _apply_extreme_wind,
+    "fuel_depletion": _apply_fuel_depletion,
+    "random_terrain": _apply_random_terrain,
+    "delayed_ignition": _apply_delayed_ignition,
+    "dense_population": _apply_dense_population,
 }
 
 AVAILABLE_SCENARIOS = tuple(sorted(_SCENARIO_REGISTRY.keys()))

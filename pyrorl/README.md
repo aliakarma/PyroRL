@@ -80,6 +80,26 @@ When running long PPO training sessions (e.g., 300k–500k timesteps), PyroRL fo
 3. **Policy Degradation Awareness**: PPO models may experience policy degradation late in training, causing the performance to drop significantly. Instead of stopping the script early, the `DegradationWarningCallback` simply logs a warning to the console, allowing you to observe the drop without prematurely truncating the run.
 4. **Final Evaluation Protocol**: For final testing, deployment, and benchmark comparison, **always** load and evaluate `best_model.zip`. The final model checkpoint saved at the end of training may represent a degraded policy and should not be used to conclude model performance.
 
+## Scenario Definitions
+
+These scenarios are specifically designed to simulate **distribution shift**, exposing the trained RL policy to conditions it did not experience during its standard training phase. They are strictly used for verification experiments to test the robustness and generalizability of the trained models.
+
+
+```bash
+python scripts/run_scenario_matrix.py --ca_model checkpoints/ppo_california_best.zip --sa_model checkpoints/ppo_saudi_best.zip --episodes 10
+```
+
+* **`high_wind`**: Increases wind magnitude and gust probability. Tests if the policy can prioritize containment in the face of rapid, directional spread.
+* **`low_fuel`**: Reduces global fuel density. Tests if the policy maintains performance when natural fire decay is higher than expected.
+* **`oasis_cluster`**: Creates concentrated clusters of dense fuel in sparse areas. Tests the policy's ability to respond to intense localized flare-ups.
+* **`multi_ignition`**: Sets multiple initial fire ignition points across the grid. Tests the policy's capacity to manage multi-front containment strategies.
+* **`narrow_corridor`**: Creates a strip of high fuel surrounded by low fuel. Tests if the policy can adapt to highly constrained, rapid linear fire propagation.
+* **`extreme_wind`**: Injects very high wind speeds (40-50 range) with random severe gust spikes. Tests if the policy can manage extremely rapid, unpredictable directional spread.
+* **`fuel_depletion`**: Causes fuel to decay much faster over time with moderate initial fuel. Tests the policy's reaction to fires that start strong but die off unpredictably.
+* **`random_terrain`**: Adds irregular elevation noise, breaking smooth terrain assumptions. Tests if the policy is robust against unpredictable fire channels and non-uniform spread.
+* **`delayed_ignition`**: Prevents the fire from starting for the first 15 steps, before sudden ignition occurs. Tests the policy's readiness and if it wastes early actions.
+* **`dense_population`**: Increases the number of populated cells significantly across the grid. These extra populations cannot be evacuated, testing the policy's ability to make rapid trade-offs and rely strictly on fire suppression for defense.
+
 ## How to Contribute
 
 For information on how to contribute, check out our [contribution guide](https://sisl.github.io/PyroRL/contribution-guide/).

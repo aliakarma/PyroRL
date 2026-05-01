@@ -47,6 +47,11 @@ SCENARIOS = [
     "oasis_cluster",
     "multi_ignition",
     "narrow_corridor",
+    "extreme_wind",
+    "fuel_depletion",
+    "random_terrain",
+    "delayed_ignition",
+    "dense_population"
 ]
 
 CALIBRATIONS = ["california", "saudi"]
