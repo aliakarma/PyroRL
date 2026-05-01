@@ -1,14 +1,12 @@
 #!/usr/bin/env python3
 """
-PPO Sanity Check Training Script for PyroRL
+PPO Training Script for PyroRL
 
-This script trains a PPO agent on PyroRL (California or Saudi calibration)
-to verify that RL can learn meaningful behavior. This is a sanity check before
-scaling to cloud training, not an optimization benchmark.
+This script trains a PPO agent on PyroRL (California or Saudi calibration).
+It supports longer training runs, checkpointing, and logging.
 
 Usage:
-    python scripts/train_ppo.py --calibration california --timesteps 50000
-    python scripts/train_ppo.py --calibration saudi --timesteps 100000
+    python scripts/train_ppo.py --calibration california --timesteps 300000
 """
 
 import argparse
@@ -16,14 +14,13 @@ import csv
 import os
 import random
 import sys
-from collections import Counter
+import shutil
 from pathlib import Path
 
 import numpy as np
-import matplotlib.pyplot as plt
 import torch
 from stable_baselines3 import PPO
-from stable_baselines3.common.callbacks import BaseCallback
+from stable_baselines3.common.callbacks import BaseCallback, EvalCallback
 from stable_baselines3.common.monitor import Monitor
 
 # Add repo root to sys.path so the nested package resolves correctly
@@ -34,196 +31,83 @@ if str(repo_root) not in sys.path:
 from pyrorl.pyrorl.envs.pyrorl import PyroRLEnv
 
 
-def linear_lr_schedule(
-    start_lr: float = 3e-4, end_lr: float = 1e-4
-):
+def linear_lr_schedule(initial_value: float = 1e-4):
     """
-    Stable-Baselines3 learning rate schedule.
-
-    progress_remaining goes from 1.0 (start) to 0.0 (end).
+    Stable-Baselines3 learning rate schedule (linear decay).
     """
-
     def schedule(progress_remaining: float) -> float:
         progress_remaining = float(np.clip(progress_remaining, 0.0, 1.0))
-        return end_lr + (start_lr - end_lr) * progress_remaining
-
+        return initial_value * progress_remaining
     return schedule
 
 
 class TrainingDiagnosticsCallback(BaseCallback):
-    """Track episode rewards, actions, and fire counts during training."""
+    """Track episode rewards, lengths, and log to CSV."""
 
-    def __init__(self, verbose: int = 0):
+    def __init__(self, log_path: str, verbose: int = 0):
         super().__init__(verbose)
+        self.log_path = log_path
         self.episode_rewards: list[float] = []
         self.episode_lengths: list[int] = []
-        self.fire_counts: list[float] = []
-        self.new_ignitions: list[float] = []
-        self.action_counts: Counter[int] = Counter()
+        
+        os.makedirs(os.path.dirname(self.log_path), exist_ok=True)
+        with open(self.log_path, 'w', newline='') as f:
+            writer = csv.writer(f)
+            writer.writerow(['step', 'reward', 'length', 'moving_avg_reward'])
 
     def _on_step(self) -> bool:
-        actions = self.locals.get("actions")
-        if actions is not None:
-            flat_actions = np.asarray(actions).reshape(-1)
-            for action in flat_actions:
-                self.action_counts[int(action)] += 1
-
         infos = self.locals.get("infos") or []
         if infos:
             info = infos[0]
-            if "fire_cells" in info:
-                self.fire_counts.append(float(info["fire_cells"]))
-            if "new_ignitions" in info:
-                self.new_ignitions.append(float(info["new_ignitions"]))
+            episode_info = info.get("episode")
+            if episode_info is not None:
+                reward = float(episode_info["r"])
+                length = int(episode_info["l"])
+                self.episode_rewards.append(reward)
+                self.episode_lengths.append(length)
+                
+                moving_avg = np.mean(self.episode_rewards[-50:]) if self.episode_rewards else reward
+                
+                with open(self.log_path, 'a', newline='') as f:
+                    writer = csv.writer(f)
+                    writer.writerow([self.num_timesteps, reward, length, moving_avg])
+        return True
 
+
+class DegradationWarningCallback(BaseCallback):
+    """
+    Logs a warning if the moving average reward drops significantly from its peak,
+    but does NOT stop training.
+    """
+    def __init__(self, window_size: int = 50, drop_threshold: float = 40.0, min_timesteps: int = 50000, verbose: int = 0):
+        super().__init__(verbose)
+        self.window_size = window_size
+        self.drop_threshold = drop_threshold
+        self.min_timesteps = min_timesteps
+        self.best_moving_avg = -np.inf
+        self.episode_rewards: list[float] = []
+        self.warned_recently = False
+
+    def _on_step(self) -> bool:
+        infos = self.locals.get("infos") or []
+        if infos:
+            info = infos[0]
             episode_info = info.get("episode")
             if episode_info is not None:
                 self.episode_rewards.append(float(episode_info["r"]))
-                self.episode_lengths.append(int(episode_info["l"]))
-                if len(self.episode_rewards) % 10 == 0:
-                    recent_rewards = self.episode_rewards[-10:]
-                    recent_lengths = self.episode_lengths[-10:]
-                    recent_fire = self.fire_counts[-100:] if self.fire_counts else []
-                    recent_ign = self.new_ignitions[-100:] if self.new_ignitions else []
-                    mean_fire = float(np.mean(recent_fire)) if recent_fire else 0.0
-                    mean_ign = float(np.mean(recent_ign)) if recent_ign else 0.0
-                    print(
-                        f"[diagnostics] episodes={len(self.episode_rewards)} "
-                        f"mean_reward_last10={np.mean(recent_rewards):.2f} "
-                        f"mean_length_last10={np.mean(recent_lengths):.1f} "
-                        f"mean_fire_cells={mean_fire:.1f} "
-                        f"mean_new_ignitions={mean_ign:.2f}"
-                    )
-
-        return True
-
-    def _on_training_end(self) -> None:
-        if self.action_counts:
-            total_actions = sum(self.action_counts.values())
-            action_summary = ", ".join(
-                f"{action}:{count / total_actions:.2%}"
-                for action, count in sorted(self.action_counts.items())
-            )
-            print(f"Action distribution: {action_summary}")
-
-        if self.fire_counts:
-            print(f"Mean fire cells during training: {np.mean(self.fire_counts):.2f}")
-
-
-class EarlyStopAndBestModelCallback(BaseCallback):
-    """
-    - Track moving average episode reward (window).
-    - Save best model whenever moving average improves.
-    - Stop early if moving average drops > drop_frac from best.
-    - Every eval_every_timesteps, run evaluation episodes and update best model if improved.
-    """
-
-    def __init__(
-        self,
-        save_dir: str,
-        env_factory,
-        seed: int,
-        window: int = 50,
-        min_timesteps_before_stop: int = 50_000,
-        abs_drop_threshold: float = 20.0,
-        patience_episodes: int = 300,
-        eval_every_timesteps: int = 10_000,
-        eval_episodes: int = 20,
-        verbose: int = 0,
-    ):
-        super().__init__(verbose)
-        self.save_dir = save_dir
-        self.env_factory = env_factory
-        self.seed = int(seed)
-        self.window = int(window)
-        self.min_timesteps_before_stop = int(min_timesteps_before_stop)
-        self.abs_drop_threshold = float(abs_drop_threshold)
-        self.patience_episodes = int(patience_episodes)
-        self.eval_every_timesteps = int(eval_every_timesteps)
-        self.eval_episodes = int(eval_episodes)
-
-        self.episode_rewards: list[float] = []
-        self.best_eval_reward: float = -1e9
-        self.best_train_ma: float = -np.inf
-        self.best_timestep: int = 0
-        self.best_model_path = os.path.join(save_dir, "best_model.zip")
-        self.last_eval_timestep: int = 0
-        self.last_improve_episode_idx: int = 0
-
-    def _on_step(self) -> bool:
-        # Periodic evaluation (timestep-based)
-        if (
-            self.eval_every_timesteps > 0
-            and (int(self.num_timesteps) - int(self.last_eval_timestep))
-            >= self.eval_every_timesteps
-        ):
-            self.last_eval_timestep = int(self.num_timesteps)
-            if self.model is not None:
-                eval_rewards, _ = run_rollouts(
-                    self.env_factory,
-                    lambda obs, env: int(
-                        np.asarray(self.model.predict(obs, deterministic=True)[0]).item()
-                    ),
-                    episodes=self.eval_episodes,
-                    seed=self.seed + 9000 + self.last_eval_timestep,
-                )
-                eval_avg = float(np.mean(eval_rewards)) if eval_rewards else float("-inf")
-                eval_std = float(np.std(eval_rewards)) if eval_rewards else float("inf")
-                print(
-                    f"[eval] timesteps={self.last_eval_timestep} "
-                    f"avg_reward={eval_avg:.2f} ± {eval_std:.2f} over {self.eval_episodes} episodes"
-                )
-                print(
-                    f"[best-update] eval={eval_avg:.2f}, best={self.best_eval_reward:.2f}"
-                )
-                if eval_avg > self.best_eval_reward:
-                    self.best_eval_reward = eval_avg
-                    self.best_timestep = int(self.last_eval_timestep)
-                    self.model.save(self.best_model_path)
-                    # Reset patience on improvement (episode-count based patience).
-                    self.last_improve_episode_idx = len(self.episode_rewards)
-                    print(
-                        f"[best] source=eval best_eval_reward={self.best_eval_reward:.2f} ± {eval_std:.2f} "
-                        f"timestep={self.best_timestep} -> saved {self.best_model_path}"
-                    )
-
-        infos = self.locals.get("infos") or []
-        if not infos:
-            return True
-
-        info = infos[0]
-        episode_info = info.get("episode")
-        if episode_info is None:
-            return True
-
-        self.episode_rewards.append(float(episode_info["r"]))
-        ep_idx = len(self.episode_rewards)
-        if ep_idx < self.window:
-            return True
-
-        moving_avg = float(np.mean(self.episode_rewards[-self.window :]))
-        improved = moving_avg > self.best_train_ma + 1e-8
-        if improved:
-            self.best_train_ma = moving_avg
-            # We no longer save the model based on training MA.
-            # We track best_train_ma solely for early stopping logic.
-            self.last_improve_episode_idx = ep_idx
-        else:
-            # Avoid premature stopping: require minimum training timesteps AND patience.
-            if int(self.num_timesteps) >= self.min_timesteps_before_stop:
-                episodes_since_improve = ep_idx - self.last_improve_episode_idx
-                if episodes_since_improve >= self.patience_episodes:
-                    # Stop only on a real collapse (absolute drop, not percentage).
-                    if np.isfinite(self.best_train_ma):
-                        if moving_avg < (self.best_train_ma - self.abs_drop_threshold):
-                            print(
-                                f"[early-stop] collapse detected: moving_avg < best_train_ma - {self.abs_drop_threshold:.0f} "
-                                f"(best_train_ma={self.best_train_ma:.2f}, "
-                                f"current_ma={moving_avg:.2f} at t={int(self.num_timesteps)}, "
-                                f"episodes_since_improve={episodes_since_improve})"
-                            )
-                            return False
-
+                
+                if len(self.episode_rewards) >= self.window_size:
+                    moving_avg = float(np.mean(self.episode_rewards[-self.window_size:]))
+                    if moving_avg > self.best_moving_avg:
+                        self.best_moving_avg = moving_avg
+                        self.warned_recently = False
+                    elif moving_avg < self.best_moving_avg - self.drop_threshold:
+                        if self.num_timesteps >= self.min_timesteps and not self.warned_recently:
+                            if self.verbose > 0:
+                                print(f"\n[WARNING] Policy degradation detected at timestep {self.num_timesteps}!")
+                                print(f"Moving avg ({moving_avg:.2f}) dropped by > {self.drop_threshold} from peak ({self.best_moving_avg:.2f}).")
+                                print("Training will continue to full timesteps.")
+                            self.warned_recently = True
         return True
 
 
@@ -239,19 +123,12 @@ def set_seeds(seed: int):
 def create_default_environment(calibration: str = "california"):
     """Create a smaller environment that is easier for PPO to learn on."""
     num_rows, num_cols = 10, 10
-
     populated_areas = np.array([[5, 5]])
-
     paths = np.array(
-        [
-            [[4, 5], [3, 5], [2, 5], [1, 5], [0, 5]],
-        ],
+        [[[4, 5], [3, 5], [2, 5], [1, 5], [0, 5]]],
         dtype=object,
     )
-
-    paths_to_pops = {
-        0: [[5, 5]],
-    }
+    paths_to_pops = {0: [[5, 5]]}
 
     env_kwargs = {
         "num_rows": num_rows,
@@ -262,9 +139,7 @@ def create_default_environment(calibration: str = "california"):
         "custom_fire_locations": np.array([[4, 4]]),
         "fire_propagation_rate": 0.06,
         "calibration": calibration,
-        # Keep episode horizon fixed so PPO sees stable trajectories.
         "terminate_on_population_loss": False,
-        # Fire-centric dense reward for initial learnability.
         "reward_weights": {
             "fire_delta": 1.0,
             "burning_cells": 0.20,
@@ -280,6 +155,12 @@ def create_default_environment(calibration: str = "california"):
 
     env = PyroRLEnv(**env_kwargs)
     return env
+
+
+def format_timesteps(timesteps: int) -> str:
+    if timesteps >= 1000 and timesteps % 1000 == 0:
+        return f"{timesteps // 1000}k"
+    return str(timesteps)
 
 
 def run_rollouts(env_factory, policy_fn, episodes: int, seed: int):
@@ -312,64 +193,42 @@ def train_ppo(
     calibration: str,
     timesteps: int,
     seed: int,
-    save_path: str,
-    verbose: int = 1,
+    save_name: str,
+    log_dir: str,
+    eval_freq: int,
 ):
-    """
-    Train PPO agent on PyroRL environment.
-    
-    Args:
-        calibration: "california" or "saudi"
-        timesteps: Total timesteps to train
-        seed: Random seed
-        save_path: Directory to save checkpoints
-        verbose: Verbosity level for PPO training
-    """
-    
     # Set seeds
     set_seeds(seed)
     
     # Create directories
-    Path(save_path).mkdir(parents=True, exist_ok=True)
-    log_dir = f"logs/{calibration}_ppo"
-    Path(log_dir).mkdir(parents=True, exist_ok=True)
+    os.makedirs("checkpoints", exist_ok=True)
+    os.makedirs(log_dir, exist_ok=True)
     
     print(f"\n{'='*70}")
-    print(f"PPO SANITY CHECK - {calibration.upper()} CALIBRATION")
+    print(f"PPO TRAINING - {calibration.upper()} CALIBRATION")
     print(f"{'='*70}")
     print(f"Timesteps:    {timesteps:,}")
     print(f"Seed:         {seed}")
-    print(f"Save path:    {save_path}")
     print(f"Log dir:      {log_dir}")
+    print(f"Eval freq:    {eval_freq}")
     print(f"{'='*70}\n")
     
     # Create environment with monitoring
     env = create_default_environment(calibration=calibration)
-    env = Monitor(
-        env,
-        log_dir,
-        info_keywords=(
-            "fire_cells",
-            "burning_population",
-            "newly_burned",
-            "fire_delta",
-            "new_ignitions",
-        ),
-    )
+    env.reset(seed=seed)
+    env = Monitor(env, log_dir)
     
-    # Print environment info
-    print(f"Environment created: {calibration}")
-    print(f"  Observation space: {env.observation_space}")
-    print(f"  Action space:      {env.action_space}")
-    print()
+    eval_env = create_default_environment(calibration=calibration)
+    eval_env.reset(seed=seed + 1000)
+    eval_env = Monitor(eval_env, log_dir)
     
     # Create PPO model
     model = PPO(
         policy="MlpPolicy",
         env=env,
-        learning_rate=linear_lr_schedule(start_lr=3e-4, end_lr=1e-4),
+        learning_rate=linear_lr_schedule(1e-4),
         n_steps=2048,
-        batch_size=64,
+        batch_size=128,
         n_epochs=10,
         gamma=0.99,
         gae_lambda=0.95,
@@ -377,90 +236,80 @@ def train_ppo(
         ent_coef=0.005,
         vf_coef=0.5,
         max_grad_norm=0.5,
-        verbose=verbose,
+        verbose=1,
         device="auto",
         seed=seed,
         tensorboard_log=log_dir,
     )
     
-    print("PPO Model Configuration:")
-    print(f"  Learning rate: linear(3e-4 -> 1e-4)")
-    print(f"  n_steps:       2048")
-    print(f"  batch_size:    64")
-    print(f"  gamma:         0.99")
-    print(f"  n_epochs:      10")
-    print(f"  ent_coef:      0.005")
-    print()
-
-    diagnostics = TrainingDiagnosticsCallback(verbose=0)
-    early_stop = EarlyStopAndBestModelCallback(
-        save_dir=save_path,
-        env_factory=lambda: create_default_environment(calibration=calibration),
-        seed=seed,
-        window=50,
-        min_timesteps_before_stop=50_000,
-        abs_drop_threshold=20.0,
-        patience_episodes=300,
-        eval_every_timesteps=10_000,
-        eval_episodes=20,
-        verbose=1 if verbose else 0,
+    csv_log_path = os.path.join(log_dir, f"{calibration}_training_curve.csv")
+    diagnostics = TrainingDiagnosticsCallback(log_path=csv_log_path, verbose=0)
+    
+    eval_callback = EvalCallback(
+        eval_env,
+        best_model_save_path="checkpoints",
+        log_path=log_dir,
+        eval_freq=eval_freq,
+        deterministic=True,
+        render=False,
     )
+    
+    degradation_callback = DegradationWarningCallback(verbose=1)
     
     # Train
     print("Starting training...")
     print("-" * 70)
     
-    model.learn(total_timesteps=timesteps, callback=[diagnostics, early_stop])
+    model.learn(total_timesteps=timesteps, callback=[diagnostics, eval_callback, degradation_callback])
     
     print("-" * 70)
     print("Training complete!\n")
 
-    if os.path.exists(early_stop.best_model_path):
-        print(f"Best eval reward: {early_stop.best_eval_reward:.2f}")
-        print(f"Best timestep:    {early_stop.best_timestep}")
-        print(f"Best source:      eval")
-        print(f"Best model path:  {early_stop.best_model_path}\n")
-        model = PPO.load(early_stop.best_model_path, env=env, device="auto")
+    # Rename best model
+    best_model_path = os.path.join("checkpoints", "best_model.zip")
+    renamed_best_model_path = os.path.join("checkpoints", f"ppo_{calibration}_best.zip")
+    if os.path.exists(best_model_path):
+        if os.path.exists(renamed_best_model_path):
+            os.remove(renamed_best_model_path)
+        shutil.move(best_model_path, renamed_best_model_path)
+        print(f"Saved best model to {renamed_best_model_path}")
+        # Load best model for evaluation
+        model = PPO.load(renamed_best_model_path, env=env, device="auto")
     else:
-        print("Warning: best_model.zip not found; using last policy.\n")
-    
-    # Extract rewards from monitor
-    episode_rewards = []
-    episode_lengths = []
-    
-    monitor_file = os.path.join(log_dir, "monitor.csv")
-    if os.path.exists(monitor_file):
-        try:
-            with open(monitor_file, newline="", encoding="utf-8") as monitor_handle:
-                reader = csv.DictReader(line for line in monitor_handle if not line.startswith("#"))
-                for row in reader:
-                    if "r" in row and "l" in row:
-                        episode_rewards.append(float(row["r"]))
-                        episode_lengths.append(int(float(row["l"])))
-        except Exception as e:
-            print(f"Warning: Could not read monitor file: {e}")
-    
+        print("Warning: best model not found.")
+
+    # Save final model
+    timestep_str = format_timesteps(timesteps)
+    final_model_name = f"ppo_{calibration}_{timestep_str}"
+    if save_name:
+        final_model_name += f"_{save_name}"
+    final_model_path = os.path.join("checkpoints", f"{final_model_name}.zip")
+    model.save(final_model_path)
+    print(f"Saved final model to {final_model_path}\n")
+
     # Print training summary
-    if episode_rewards:
-        print("TRAINING SUMMARY")
-        print("-" * 70)
-        print(f"Total episodes: {len(episode_rewards)}")
-        print(f"Reward range:   [{min(episode_rewards):.2f}, {max(episode_rewards):.2f}]")
-        
-        if len(episode_rewards) >= 10:
-            last_10_avg = np.mean(episode_rewards[-10:])
-            first_10_avg = np.mean(episode_rewards[:10])
-            print(f"First 10 avg:   {first_10_avg:.2f}")
-            print(f"Last 10 avg:    {last_10_avg:.2f}")
-            improvement = last_10_avg - first_10_avg
-            print(f"Improvement:    {improvement:+.2f}")
-        else:
-            avg_reward = np.mean(episode_rewards)
-            print(f"Average reward: {avg_reward:.2f}")
-        
-        print(f"Avg episode length: {np.mean(episode_lengths):.1f} steps")
-        print("-" * 70)
-        print()
+    print(f"{'='*70}")
+    print("TRAINING SUMMARY")
+    print(f"{'='*70}")
+    print(f"Total timesteps: {timesteps}")
+    if os.path.exists(csv_log_path):
+        try:
+            with open(csv_log_path, 'r') as f:
+                reader = csv.DictReader(f)
+                rewards = [float(row['reward']) for row in reader]
+                if rewards:
+                    best_reward = max(rewards)
+                    final_reward = rewards[-1]
+                    print(f"Best reward:     {best_reward:.2f}")
+                    print(f"Final reward:    {final_reward:.2f}")
+                    if len(rewards) >= 10:
+                        first_10_avg = np.mean(rewards[:10])
+                        last_10_avg = np.mean(rewards[-10:])
+                        improvement = last_10_avg - first_10_avg
+                        print(f"Improvement:     {improvement:+.2f} (from first 10 to last 10 episodes)")
+        except Exception as e:
+            print(f"Could not read training curve: {e}")
+    print(f"{'='*70}\n")
 
     def make_eval_env():
         return create_default_environment(calibration=calibration)
@@ -470,14 +319,14 @@ def train_ppo(
         make_eval_env,
         lambda obs, env: env.action_space.sample(),
         episodes=baseline_episodes,
-        seed=seed + 1000,
+        seed=seed + 2000,
     )
 
     ppo_rewards, ppo_lengths = run_rollouts(
         make_eval_env,
         lambda obs, env: int(np.asarray(model.predict(obs, deterministic=True)[0]).item()),
         episodes=baseline_episodes,
-        seed=seed + 1000,
+        seed=seed + 2000,
     )
 
     print("BASELINE COMPARISON")
@@ -493,86 +342,13 @@ def train_ppo(
     print("-" * 70)
     print()
     
-    # Final saved artifact is best_model.zip (captured during training).
-    
-    # Evaluation
-    print("EVALUATION (20 PPO episodes)")
-    print("-" * 70)
-    
-    eval_rewards = []
-    eval_lengths = []
-    
-    for episode in range(20):
-        eval_env = make_eval_env()
-        obs, _ = eval_env.reset(seed=seed + 3000 + episode)
-        done = False
-        episode_reward = 0.0
-        episode_length = 0
-        
-        while not done:
-            action, _states = model.predict(obs, deterministic=True)
-            action_value = int(np.asarray(action).item())
-            obs, reward, terminated, truncated, info = eval_env.step(action_value)
-            done = terminated or truncated
-            episode_reward += reward
-            episode_length += 1
-        
-        eval_rewards.append(episode_reward)
-        eval_lengths.append(episode_length)
-        print(f"  Episode {episode+1}: reward={episode_reward:7.2f}, length={episode_length:4d}")
-        eval_env.close()
-    
-    print("-" * 70)
-    print(f"Eval avg reward: {np.mean(eval_rewards):7.2f} ± {np.std(eval_rewards):.2f}")
-    print(f"Eval avg length: {np.mean(eval_lengths):7.1f} ± {np.std(eval_lengths):.1f}")
-    print()
-    
-    # Plot reward curve
-    if episode_rewards:
-        plot_path = os.path.join(log_dir, f"{calibration}_reward_curve.png")
-        
-        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 5))
-        
-        # Episode rewards
-        ax1.plot(episode_rewards, alpha=0.5, label="Episode reward")
-        if len(episode_rewards) > 20:
-            window = 20
-            smoothed = np.convolve(episode_rewards, np.ones(window)/window, mode='valid')
-            ax1.plot(range(window-1, len(episode_rewards)), smoothed, linewidth=2, label=f"Smoothed (window={window})")
-        ax1.set_xlabel("Episode")
-        ax1.set_ylabel("Reward")
-        ax1.set_title(f"{calibration.upper()} - Episode Rewards")
-        ax1.grid(True, alpha=0.3)
-        ax1.legend()
-        
-        # Episode lengths
-        ax2.plot(episode_lengths, alpha=0.5, color='orange', label="Episode length")
-        if len(episode_lengths) > 20:
-            window = 20
-            smoothed = np.convolve(episode_lengths, np.ones(window)/window, mode='valid')
-            ax2.plot(range(window-1, len(episode_lengths)), smoothed, linewidth=2, color='darkorange', label=f"Smoothed (window={window})")
-        ax2.set_xlabel("Episode")
-        ax2.set_ylabel("Length (steps)")
-        ax2.set_title(f"{calibration.upper()} - Episode Lengths")
-        ax2.grid(True, alpha=0.3)
-        ax2.legend()
-        
-        plt.tight_layout()
-        plt.savefig(plot_path, dpi=100, bbox_inches='tight')
-        print(f"Reward curve saved to: {plot_path}\n")
-        plt.close()
-    
-    # Close environment
     env.close()
-    
-    print(f"{'='*70}")
-    print("PPO SANITY CHECK COMPLETE")
-    print(f"{'='*70}\n")
+    eval_env.close()
 
 
 def main():
     parser = argparse.ArgumentParser(
-        description="PPO sanity check training for PyroRL"
+        description="PPO training for PyroRL"
     )
     parser.add_argument(
         "--calibration",
@@ -584,7 +360,7 @@ def main():
     parser.add_argument(
         "--timesteps",
         type=int,
-        default=50000,
+        default=300000,
         help="Total training timesteps",
     )
     parser.add_argument(
@@ -594,16 +370,22 @@ def main():
         help="Random seed for reproducibility",
     )
     parser.add_argument(
-        "--save_path",
+        "--save_name",
         type=str,
-        default="checkpoints/",
-        help="Directory to save model checkpoints",
+        default="",
+        help="Optional model name",
     )
     parser.add_argument(
-        "--verbose",
+        "--log_dir",
+        type=str,
+        default="logs/ppo/",
+        help="Directory for logs",
+    )
+    parser.add_argument(
+        "--eval_freq",
         type=int,
-        default=1,
-        help="Verbosity level for PPO training (0-2)",
+        default=10000,
+        help="Evaluation frequency",
     )
     
     args = parser.parse_args()
@@ -612,8 +394,9 @@ def main():
         calibration=args.calibration,
         timesteps=args.timesteps,
         seed=args.seed,
-        save_path=args.save_path,
-        verbose=args.verbose,
+        save_name=args.save_name,
+        log_dir=args.log_dir,
+        eval_freq=args.eval_freq,
     )
 
 

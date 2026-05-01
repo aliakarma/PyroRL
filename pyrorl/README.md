@@ -42,6 +42,44 @@ A compiled visualization of numerous iterations is seen below. For more examples
 
 ![Example Visualization of PyroRL](https://github.com/sisl/PyroRL/raw/master/imgs/example_visualization.gif)
 
+## Training (Extended Runs)
+
+PyroRL supports stable, long-running PPO training suitable for research experiments.
+
+To run a long training session (e.g., 300k timesteps) with the California calibration:
+
+```bash
+python scripts/train_ppo.py --calibration california --timesteps 300000
+```
+
+### Explanation of Outputs
+
+- **Logs**: Training logs are automatically saved to `logs/ppo/`. This includes a `monitor.csv` with episode stats and a `<calibration>_training_curve.csv` containing step, reward, episode length, and a moving average of the reward. You can monitor the training progress via these files or TensorBoard logs if active.
+- **Checkpoints**: Model checkpoints are saved in the `checkpoints/` directory.
+
+### Best Model vs Final Model
+
+During training, an evaluation callback runs periodically.
+- **Best Model** (`checkpoints/<calibration>_best.zip`): Saved whenever the model achieves a new highest average reward during evaluation episodes. This is usually the model you want to use for downstream tasks.
+- **Final Model** (e.g., `checkpoints/ppo_california_300k.zip`): The model checkpoint saved at the very end of the training process, regardless of whether it performed best.
+
+### Reproducibility
+
+To ensure reproducible training runs, the training script explicitly sets random seeds across `numpy`, `torch`, the `random` module, and the environment. You can control the seed via the `--seed` argument (defaults to 42):
+
+```bash
+python scripts/train_ppo.py --calibration california --timesteps 300000 --seed 42
+```
+
+## Training Protocol
+
+When running long PPO training sessions (e.g., 300k–500k timesteps), PyroRL follows a specific protocol to ensure the highest quality model is retained:
+
+1. **Full-Length Training**: Training runs always execute to the full specified timesteps, without stopping early. This ensures the model explores the environment fully.
+2. **Best Model Selection via Evaluation**: During training, an evaluation callback actively evaluates the model. The model achieving the highest average reward is saved as `checkpoints/ppo_<calibration>_best.zip`.
+3. **Policy Degradation Awareness**: PPO models may experience policy degradation late in training, causing the performance to drop significantly. Instead of stopping the script early, the `DegradationWarningCallback` simply logs a warning to the console, allowing you to observe the drop without prematurely truncating the run.
+4. **Final Evaluation Protocol**: For final testing, deployment, and benchmark comparison, **always** load and evaluate `best_model.zip`. The final model checkpoint saved at the end of training may represent a degraded policy and should not be used to conclude model performance.
+
 ## How to Contribute
 
 For information on how to contribute, check out our [contribution guide](https://sisl.github.io/PyroRL/contribution-guide/).
