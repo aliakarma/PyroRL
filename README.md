@@ -26,7 +26,7 @@ This project extends PyroRL with:
 ```bash
 git clone https://github.com/aliakarma/PyroRL
 cd PyroRL
-pip install -e .
+pip install -r requirements.txt
 ```
 
 ## Project Structure
@@ -52,32 +52,19 @@ PyroRL/
 ### Install
 
 ```bash
-pip install -e .
+pip install -r requirements.txt
 ```
 
-### Run basic test
+### Run Evaluation (California)
 
 ```bash
-python scripts/test_calibration.py --steps 50
+python scripts/evaluate.py --model checkpoints/ppo_california_best.zip --env california --episodes 50
 ```
 
-### Run extended test
+### Run Evaluation (Saudi)
 
 ```bash
-python scripts/test_calibration.py --steps 100 --seeds 5
-```
-
-### Run with trajectory export
-
-```bash
-python scripts/test_calibration.py --steps 100 --seeds 5 --csv results.csv
-```
-
-### Plot results
-
-```bash
-python scripts/plot_calibration.py results.csv
-python scripts/plot_calibration.py results.csv --output calibration_plot.png
+python scripts/evaluate.py --model checkpoints/ppo_saudi_best.zip --env saudi --episodes 50
 ```
 
 ## Calibration Validation
@@ -138,23 +125,18 @@ The repository includes scripts to train robust models on different environment 
 ### Train California model
 
 ```bash
-python scripts/train_ppo.py --calibration california --timesteps 100000
+python scripts/train_ppo.py --calibration california --timesteps 300000
 ```
-Then, save the best model:
-
-```bash
-rename checkpoints\best_model.zip ppo_california.zip
-```
+Then, the best model is automatically saved as:
+`checkpoints/ppo_california_best.zip`
 
 ### Train Saudi model
 
 ```bash
-python scripts/train_ppo.py --calibration saudi --timesteps 100000
+python scripts/train_ppo.py --calibration saudi --timesteps 300000
 ```
-Then, save the best model:
-```bash
-mv checkpoints/best_model.zip checkpoints/ppo_saudi.zip
-```
+Then, the best model is automatically saved as:
+`checkpoints/ppo_saudi_best.zip`
 
 ## Scenario System
 
