@@ -1,0 +1,21 @@
+scenario,model,failure_type,severity,notes
+high_wind,CA,over-spread,high,Policy failed to reduce fire significantly (burned 54 vs baseline 51)
+high_wind,SA,over-spread,high,Policy failed to reduce fire significantly (burned 41 vs baseline 51)
+low_fuel,CA,none,low,"Policy succeeded (burned 16, suppression 86)"
+low_fuel,SA,none,low,"Policy succeeded (burned 15, suppression 100)"
+oasis_cluster,CA,over-spread,high,Policy failed to reduce fire significantly (burned 99 vs baseline 99)
+oasis_cluster,SA,partial containment,medium,Moderate fire reduction but still significant burn area (67)
+multi_ignition,CA,over-spread,high,Policy failed to reduce fire significantly (burned 88 vs baseline 94)
+multi_ignition,SA,partial containment,medium,Moderate fire reduction but still significant burn area (59)
+narrow_corridor,CA,none,low,"Policy succeeded (burned 12, suppression 98)"
+narrow_corridor,SA,none (aggressive),low,"Aggressive but effective suppression (100 actions, 9 burned)"
+extreme_wind,CA,over-spread,high,Policy failed to reduce fire significantly (burned 64 vs baseline 60)
+extreme_wind,SA,partial containment,medium,Moderate fire reduction but still significant burn area (47)
+fuel_depletion,CA,partial containment,medium,Moderate fire reduction but still significant burn area (3)
+fuel_depletion,SA,over-suppression,medium,High suppression (100 actions) with low efficiency (0.01)
+random_terrain,CA,over-spread,high,Policy failed to reduce fire significantly (burned 80 vs baseline 92)
+random_terrain,SA,none,low,"Policy succeeded (burned 32, suppression 100)"
+delayed_ignition,CA,over-spread,high,Policy failed to reduce fire significantly (burned 87 vs baseline 95)
+delayed_ignition,SA,none,low,"Policy succeeded (burned 44, suppression 100)"
+dense_population,CA,over-spread,high,Policy failed to reduce fire significantly (burned 86 vs baseline 93)
+dense_population,SA,none,low,"Policy succeeded (burned 37, suppression 89)"
